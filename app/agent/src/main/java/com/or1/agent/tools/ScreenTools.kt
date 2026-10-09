@@ -48,6 +48,7 @@ class ScreenTools(private val context: Context) {
     private val hidden get() = HiddenDisplay.targetDisplay() != Display.DEFAULT_DISPLAY
 
     suspend fun screen(withScreenshot: Boolean): ToolOutput {
+        HiddenDisplay.ensure() // wakes the work display if it was parked between requests
         val text = read()
         // Canvas-drawn UIs expose no elements; show the agent a picture instead.
         val needImage = withScreenshot || elements.isEmpty() && !text.contains(OWN_UI) && text != EMPTY_WORK_SCREEN
@@ -123,6 +124,7 @@ class ScreenTools(private val context: Context) {
 
     suspend fun act(args: JSONObject): ToolOutput {
         val service = service()
+        HiddenDisplay.ensure()
         val displayId = HiddenDisplay.targetDisplay()
         HiddenDisplay.markActivity()
         when (val action = args.getString("action")) {

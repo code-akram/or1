@@ -180,8 +180,11 @@ class SystemTools(private val context: Context) {
                 context.packageManager.getLaunchIntentForPackage(pkg)
                     ?: throw IllegalArgumentException("$pkg has no launchable activity (is the package name right? see apps list).")
             }
-            args.optString("uri").isNotBlank() -> Intent(Intent.ACTION_VIEW, Uri.parse(args.getString("uri")))
-            args.optString("settings_action").isNotBlank() -> Intent(args.getString("settings_action"))
+            // A fresh task, so the requested page shows even if the app is already open on another page.
+            args.optString("uri").isNotBlank() ->
+                Intent(Intent.ACTION_VIEW, Uri.parse(args.getString("uri"))).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            args.optString("settings_action").isNotBlank() ->
+                Intent(args.getString("settings_action")).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK)
             else -> throw IllegalArgumentException("open needs `package`, `uri` or `settings_action`.")
         }
         // The package we expect in front afterwards; null when a chooser would pick (or nothing resolves yet).

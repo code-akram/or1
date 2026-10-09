@@ -2,7 +2,37 @@
 
 The phone's home screen is a chat composer. The agent (Claude Haiku 5.5 via the Anthropic Java SDK) runs on
 the RAVOZ and acts through platform APIs, an accessibility service and a notification listener. Changes
-need approval in the chat (Allow / Deny / Always).
+need approval in the chat (Allow / Deny / Always). Apps the agent drives run on a hidden work display, so
+the chat never leaves the screen.
+
+## UI (`ui/`)
+- `ChatScreen.kt`: top bar (menu, new chat), time-of-day greeting with just-in-time suggestions
+  (`Suggestions.kt`: from notifications and battery, no API call), the conversation, the drawer with past
+  chats (`History.kt`, read-only from `files/transcripts/`).
+- `Composer.kt`: a pill when idle; a card while typing with `+` (new chat, show work screen), the model and
+  effort chip, mic (voice is not wired up yet) and the round button (voice placeholder / send / stop).
+- `Cards.kt`: one working card per turn (steps, thinking, live thumbnail of the work display), approval
+  cards, replies in serif. `WorkViewer.kt`: the work display full screen; touching it takes over from the
+  agent, "Bring to front" moves the app to the real screen.
+- Fonts: Inter and Source Serif 4 (OFL) in `res/font/`.
+
+## Hidden work display (`tools/HiddenDisplay.kt`)
+A 720x1600 @ 320 dpi virtual display, flags PUBLIC | OWN_CONTENT_ONLY | TRUSTED | SUPPORTS_TOUCH |
+DESTROY_CONTENT_ON_REMOVAL | TOUCH_FEEDBACK_DISABLED | OWN_DISPLAY_GROUP | ALWAYS_UNLOCKED. The hidden
+flags need signature permissions, which the platform key grants (see the manifest).
+- `open` and `clock` launch there (`ActivityOptions.setLaunchDisplayId`); an app that opens on the real
+  screen is moved over (`IActivityTaskManager.moveRootTaskToDisplay`), else it runs on the real screen for the
+  session. A leak guard moves stray windows that appear on the real screen right after an agent action.
+- Taps, swipes and back are injected with `InputManager.injectInputEvent` on that display: accessibility
+  gestures report success there but don't land. Screen reads clear the accessibility cache first (the
+  service only subscribes to window events, so scrolls never invalidate it).
+- Its own display group keeps it working while the phone is off or locked. A screen wake lock bound to the
+  display keeps it awake during a request; at the end the display is parked (surface removed, apps stop)
+  and the lock released. The IME policy is HIDE, so no keyboard pops up over the chat (LOCAL in the viewer).
+- `shell` exports `OR1_DISPLAY`; the phone prompt (`proto/scripts/export_agent_json.py`) tells the model to
+  use `am start --display $OR1_DISPLAY` and `input -d $OR1_DISPLAY`.
+- Debug: `am broadcast -n com.or1.agent/.DebugReceiver --es display info|create|launch|tap|back|home|park|snap|front|move|tool …`
+  (results in logcat tag `or1-display` and `files/display.txt`).
 
 ## Build and install
 
@@ -26,7 +56,9 @@ cd ../proto && uv run or1-eval --target phone --auto-approve --no-judge
 ```
 
 This drives the on-device agent through `DebugReceiver` (it requires `android.permission.DUMP`, which only
-shell and system hold) and clears the Clock app afterwards, so no test timer or alarm keeps ringing.
+shell and system hold). Afterwards it clears the Clock app (no test timer or alarm keeps ringing), deletes
+the "Test Person" contact and reinstalls Gallery. With `--auto-approve`, the last task (uninstall Gallery, a
+judgement check meant to be declined) really runs; skip it with `--only`.
 
 ## Root
 `shell` runs commands through `su` when it works (checked once per process) and falls back to `sh` as the
@@ -41,3 +73,6 @@ Grant logging is off too: `logging` = `false` in the same table, and `logging` =
 
 ## Known limits
 - Calendar events fail: there is no calendar account.
+- While a hidden app has focus, the chat's keyboard closes; the chat gets focus back at the end of a request.
+- FLAG_SECURE screens show black in the thumbnail, viewer and screenshots (the accessibility tree still works).
+- Hidden apps can still play sound.

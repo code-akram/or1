@@ -31,7 +31,7 @@
 
     <application
         android:label="or1"
-        android:theme="@android:style/Theme.Material.NoActionBar">
+        android:theme="@style/Theme.Or1">
 
         <activity
             android:name=".MainActivity"
