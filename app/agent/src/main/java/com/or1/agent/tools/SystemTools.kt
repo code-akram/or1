@@ -123,7 +123,8 @@ class SystemTools(private val context: Context) {
             else -> throw IllegalArgumentException("Unknown action '$action'.")
         }
         label?.let { intent.putExtra(AlarmClock.EXTRA_MESSAGE, it) }
-        context.startActivity(intent.putExtra(AlarmClock.EXTRA_SKIP_UI, true).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        // On the hidden display, so any UI the Clock app shows despite SKIP_UI stays out of sight.
+        HiddenDisplay.start(intent.putExtra(AlarmClock.EXTRA_SKIP_UI, true))
         if (args.getString("action") == "set_timer") return "Timer set for ${args.getInt("seconds")} seconds."
         Thread.sleep(1500)
         return nextAlarm()
@@ -171,6 +172,7 @@ class SystemTools(private val context: Context) {
         ).joinToString("\n")
     }
 
+    /** Opens on the hidden display (see [HiddenDisplay]); the user stays in the chat. */
     suspend fun open(args: JSONObject, screen: ScreenTools): ToolOutput {
         val intent = when {
             args.optString("package").isNotBlank() -> {
@@ -182,9 +184,11 @@ class SystemTools(private val context: Context) {
             args.optString("settings_action").isNotBlank() -> Intent(args.getString("settings_action"))
             else -> throw IllegalArgumentException("open needs `package`, `uri` or `settings_action`.")
         }
-        screen.dismissShade()
-        context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        delay(1200)
+        // The package we expect in front afterwards; null when a chooser would pick (or nothing resolves yet).
+        val expect = intent.resolveActivity(context.packageManager)?.packageName?.takeIf { it != "android" }
+        if (HiddenDisplay.ensure() == null) screen.dismissShade()
+        HiddenDisplay.launch(intent, expect)
+        delay(600)
         return screen.screen(false)
     }
 }

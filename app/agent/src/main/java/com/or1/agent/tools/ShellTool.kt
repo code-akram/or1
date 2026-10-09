@@ -9,15 +9,17 @@ private const val OUTPUT_LIMIT = 4000
 private const val TIMEOUT_SECONDS = 60L
 
 /**
- * Runs a shell command as root when su grants it, otherwise as the app's own uid. TrebleDroid's phh-su only grants
- * root through phh's Superuser app, which is not installed, so for now commands run as the (platform-signed) app.
+ * Runs a shell command as root when su grants it (phh-su, approved for this app in phh's Superuser app), otherwise as
+ * the app's own (platform-signed) uid.
  */
 class ShellTool {
     private val rootAvailable by lazy { exec(listOf("su", "-c", "id -u"))?.trim() == "0" }
 
     suspend fun run(command: String): String = withContext(Dispatchers.IO) {
         val who = if (rootAvailable) "root" else "the agent app's uid (no root available)"
-        val argv = if (rootAvailable) listOf("su", "-c", command) else listOf("sh", "-c", command)
+        // The agent's hidden work display, for `am start --display` and `input -d`.
+        val script = "export OR1_DISPLAY=${HiddenDisplay.ensure() ?: 0}; $command"
+        val argv = if (rootAvailable) listOf("su", "-c", script) else listOf("sh", "-c", script)
         val result = exec(argv) ?: "Could not start a shell."
         val text = if (result.length > OUTPUT_LIMIT) result.take(OUTPUT_LIMIT) + "\n... [truncated, ${result.length} chars total]" else result
         "[ran as $who]\n" + text.ifEmpty { "(no output)" }

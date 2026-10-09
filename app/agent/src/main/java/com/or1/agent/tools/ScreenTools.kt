@@ -15,7 +15,9 @@ import android.view.accessibility.AccessibilityWindowInfo
 import com.or1.agent.A11yService
 import java.io.ByteArrayOutputStream
 import kotlin.coroutines.resume
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
 import org.json.JSONObject
 
@@ -23,7 +25,11 @@ private const val MAX_ELEMENTS = 150
 private const val SCREENSHOT_WIDTH = 360
 private const val SETTLE_MS = 1000L
 
-/** Reads the screen as numbered elements (same format as proto/src/or1/screen.py) and acts on it, via A11yService. */
+/**
+ * Reads the screen as numbered elements (same format as proto/src/or1/screen.py) and acts on it, via A11yService.
+ * Works on the agent's hidden display (see [HiddenDisplay]); falls back to the real screen when that's unavailable
+ * or the current app refused it.
+ */
 class ScreenTools(private val context: Context) {
     private class Element(val node: AccessibilityNodeInfo, val x: Int, val y: Int, val label: String)
 
@@ -39,22 +45,34 @@ class ScreenTools(private val context: Context) {
         A11yService.instance?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
     }
 
+    private val hidden get() = HiddenDisplay.targetDisplay() != Display.DEFAULT_DISPLAY
+
     suspend fun screen(withScreenshot: Boolean): ToolOutput {
         val text = read()
         // Canvas-drawn UIs expose no elements; show the agent a picture instead.
-        val needImage = withScreenshot || elements.isEmpty() && !text.contains(OWN_UI)
+        val needImage = withScreenshot || elements.isEmpty() && !text.contains(OWN_UI) && text != EMPTY_WORK_SCREEN
         return ToolOutput(text, if (needImage) screenshot() else null)
     }
 
     private fun read(): String {
         val service = service()
         elements.clear()
-        val root = topWindowRoot(service) ?: return "Foreground: unknown. No window content is available."
-        val pkg = root.packageName?.toString() ?: "unknown"
-        if (pkg == context.packageName) return "Foreground: $OWN_UI. Open an app to work on it."
+        // The service only subscribes to window events, so scrolls and content changes never invalidate the
+        // accessibility node cache; without this, reads after a scroll return the old tree.
+        service.clearCache()
+        val displayId = HiddenDisplay.targetDisplay()
+        val root = if (displayId == Display.DEFAULT_DISPLAY) {
+            topWindowRoot(service) ?: return "Foreground: unknown. No window content is available."
+        } else {
+            HiddenDisplay.topAppWindow(displayId)?.root
+        }
+        val pkg = root?.packageName?.toString() ?: context.packageName
+        if (pkg == context.packageName) {
+            return if (displayId == Display.DEFAULT_DISPLAY) "Foreground: $OWN_UI. Open an app to work on it." else EMPTY_WORK_SCREEN
+        }
         val lines = mutableListOf<String>()
-        walk(root, lines)
-        val header = "Foreground: $pkg. Screen ${screenSize().let { "${it.width()}x${it.height()}" }}."
+        walk(root!!, lines)
+        val header = "Foreground: $pkg. Screen ${screenSize(displayId).let { "${it.width()}x${it.height()}" }}."
         return header + "\n" + lines.joinToString("\n").ifEmpty { "(no readable elements; screenshot attached)" }
     }
 
@@ -105,35 +123,37 @@ class ScreenTools(private val context: Context) {
 
     suspend fun act(args: JSONObject): ToolOutput {
         val service = service()
+        val displayId = HiddenDisplay.targetDisplay()
+        HiddenDisplay.markActivity()
         when (val action = args.getString("action")) {
             "tap", "long_press" -> {
                 val (x, y) = target(args)
                 val duration = if (action == "tap") 50L else 700L
-                if (!gesture(service, Path().apply { moveTo(x.toFloat(), y.toFloat()) }, duration)) {
+                if (!gesture(service, displayId, x.toFloat(), y.toFloat(), x.toFloat(), y.toFloat(), duration)) {
                     error("The $action gesture was not delivered.")
                 }
             }
             "type" -> {
                 val text = args.optString("text").ifEmpty { throw IllegalArgumentException("type needs `text`.") }
-                val node = elementNode(args) ?: service.rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                val node = elementNode(args) ?: activeRoot(service)?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
                     ?: throw IllegalArgumentException("No field to type into: tap an editable field first or pass `element`.")
                 val bundle = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) }
                 check(node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, bundle)) { "The field did not accept text." }
             }
             "scroll" -> {
-                val size = screenSize()
+                val size = screenSize(displayId)
                 val cx = size.width() / 2f
                 val cy = size.height() / 2f
                 val dy = size.height() * 0.22f
                 val dx = size.width() * 0.33f
                 // The finger moves opposite to the direction the content should reveal.
-                val path = when (args.optString("direction", "down")) {
-                    "up" -> Path().apply { moveTo(cx, cy - dy); lineTo(cx, cy + dy) }
-                    "left" -> Path().apply { moveTo(cx - dx, cy); lineTo(cx + dx, cy) }
-                    "right" -> Path().apply { moveTo(cx + dx, cy); lineTo(cx - dx, cy) }
-                    else -> Path().apply { moveTo(cx, cy + dy); lineTo(cx, cy - dy) }
+                val (from, to) = when (args.optString("direction", "down")) {
+                    "up" -> (cx to cy - dy) to (cx to cy + dy)
+                    "left" -> (cx - dx to cy) to (cx + dx to cy)
+                    "right" -> (cx + dx to cy) to (cx - dx to cy)
+                    else -> (cx to cy + dy) to (cx to cy - dy)
                 }
-                check(gesture(service, path, 300)) { "The scroll gesture was not delivered." }
+                check(gesture(service, displayId, from.first, from.second, to.first, to.second, 300)) { "The scroll gesture was not delivered." }
             }
             "key" -> key(service, args.optString("key"))
             else -> throw IllegalArgumentException("Unknown action '$action'.")
@@ -143,6 +163,19 @@ class ScreenTools(private val context: Context) {
     }
 
     private fun key(service: A11yService, key: String) {
+        if (hidden) when (key) {
+            // Global actions go to whichever display has focus, so keys for the hidden display are injected there.
+            "back" -> {
+                HiddenDisplay.focus()
+                check(HiddenDisplay.injectKey(android.view.KeyEvent.KEYCODE_BACK, HiddenDisplay.targetDisplay())) { "The back key was not delivered." }
+                return
+            }
+            "home" -> {
+                HiddenDisplay.goHome()
+                return
+            }
+            "recents" -> throw IllegalArgumentException("recents is not available on the work screen; use open to switch apps.")
+        }
         val global = when (key) {
             "back" -> AccessibilityService.GLOBAL_ACTION_BACK
             "home" -> AccessibilityService.GLOBAL_ACTION_HOME
@@ -178,7 +211,13 @@ class ScreenTools(private val context: Context) {
     }
 
     private fun focusedInput(service: A11yService) =
-        service.rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: throw IllegalStateException("No focused text field.")
+        activeRoot(service)?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: throw IllegalStateException("No focused text field.")
+
+    /** The window the agent is working in: the hidden display's top app, or the real screen's active window. */
+    private fun activeRoot(service: A11yService): AccessibilityNodeInfo? {
+        val displayId = HiddenDisplay.targetDisplay()
+        return if (displayId == Display.DEFAULT_DISPLAY) service.rootInActiveWindow else HiddenDisplay.topAppWindow(displayId)?.root
+    }
 
     private fun elementNode(args: JSONObject): AccessibilityNodeInfo? {
         if (!args.has("element")) return null
@@ -196,10 +235,23 @@ class ScreenTools(private val context: Context) {
         throw IllegalArgumentException("tap/long_press needs `element` or `x` and `y`.")
     }
 
-    private suspend fun gesture(service: A11yService, path: Path, durationMs: Long): Boolean = suspendCancellableCoroutine { cont ->
+    /**
+     * A one-finger stroke on [displayId]. On the hidden display, touch events are injected directly: accessibility
+     * gestures report success there but don't land (AOSP 13 only installs its injector for displays that existed when
+     * the service connected).
+     */
+    private suspend fun gesture(service: A11yService, displayId: Int, x1: Float, y1: Float, x2: Float, y2: Float, durationMs: Long): Boolean {
+        if (displayId != Display.DEFAULT_DISPLAY && withContext(Dispatchers.IO) { HiddenDisplay.injectStroke(x1, y1, x2, y2, durationMs, displayId) }) {
+            return true
+        }
+        val path = Path().apply { moveTo(x1, y1); if (x1 != x2 || y1 != y2) lineTo(x2, y2) }
+        return dispatch(service, displayId, path, durationMs)
+    }
+
+    private suspend fun dispatch(service: A11yService, displayId: Int, path: Path, durationMs: Long): Boolean = suspendCancellableCoroutine { cont ->
         val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
         val accepted = service.dispatchGesture(
-            GestureDescription.Builder().addStroke(stroke).build(),
+            GestureDescription.Builder().addStroke(stroke).setDisplayId(displayId).build(),
             object : AccessibilityService.GestureResultCallback() {
                 override fun onCompleted(gestureDescription: GestureDescription?) { if (cont.isActive) cont.resume(true) }
                 override fun onCancelled(gestureDescription: GestureDescription?) { if (cont.isActive) cont.resume(false) }
@@ -211,8 +263,9 @@ class ScreenTools(private val context: Context) {
 
     private suspend fun screenshot(): String? {
         val service = A11yService.instance ?: return null
+        val displayId = HiddenDisplay.targetDisplay()
         val bitmap = suspendCancellableCoroutine<Bitmap?> { cont ->
-            service.takeScreenshot(Display.DEFAULT_DISPLAY, context.mainExecutor, object : AccessibilityService.TakeScreenshotCallback {
+            service.takeScreenshot(displayId, context.mainExecutor, object : AccessibilityService.TakeScreenshotCallback {
                 override fun onSuccess(result: AccessibilityService.ScreenshotResult) {
                     val hardware = Bitmap.wrapHardwareBuffer(result.hardwareBuffer, result.colorSpace)
                     val copy = hardware?.copy(Bitmap.Config.ARGB_8888, false)
@@ -224,7 +277,7 @@ class ScreenTools(private val context: Context) {
                     if (cont.isActive) cont.resume(null)
                 }
             })
-        } ?: return null
+        } ?: HiddenDisplay.preview.value?.takeIf { displayId != Display.DEFAULT_DISPLAY } ?: return null
         val scale = SCREENSHOT_WIDTH.toFloat() / bitmap.width
         val small = Bitmap.createScaledBitmap(bitmap, SCREENSHOT_WIDTH, (bitmap.height * scale).toInt(), true)
         val out = ByteArrayOutputStream()
@@ -232,8 +285,9 @@ class ScreenTools(private val context: Context) {
         return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
     }
 
-    private fun screenSize(): Rect {
-        val display = context.getSystemService(android.hardware.display.DisplayManager::class.java).getDisplay(Display.DEFAULT_DISPLAY)
+    private fun screenSize(displayId: Int = Display.DEFAULT_DISPLAY): Rect {
+        val display = context.getSystemService(android.hardware.display.DisplayManager::class.java).getDisplay(displayId)
+            ?: context.getSystemService(android.hardware.display.DisplayManager::class.java).getDisplay(Display.DEFAULT_DISPLAY)
         val size = android.graphics.Point()
         @Suppress("DEPRECATION")
         display.getRealSize(size)
@@ -242,5 +296,6 @@ class ScreenTools(private val context: Context) {
 
     private companion object {
         const val OWN_UI = "the or1 chat (the agent's own interface)"
+        const val EMPTY_WORK_SCREEN = "Foreground: none. The work screen is empty: open an app to work on it."
     }
 }

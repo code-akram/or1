@@ -5,6 +5,7 @@ import android.content.Intent
 import android.util.Log
 import com.anthropic.client.okhttp.AnthropicOkHttpClient
 import com.anthropic.errors.AnthropicServiceException
+import com.or1.agent.tools.HiddenDisplay
 import com.or1.agent.tools.Tools
 import com.or1.agent.ui.StepLabels
 import java.io.File
@@ -55,18 +56,32 @@ object AgentHub {
     val busy: StateFlow<Boolean> = _busy
     private val _totalCost = MutableStateFlow(0.0)
     val totalCost: StateFlow<Double> = _totalCost
+    private val _effort = MutableStateFlow("medium")
+    /** Reasoning effort for the next requests: low, medium or high. */
+    val effort: StateFlow<String> = _effort
+    lateinit var model: String
+        private set
 
     private lateinit var appContext: Context
     private lateinit var tools: Tools
     private var agent: Agent? = null
+    private var agentConfig: AgentConfig? = null
     private var current: Job? = null
     private var autoApprove = false
+    /** Set when the user takes over the hidden app, so the chat doesn't jump back in front of it. */
+    @Volatile
+    private var suppressReturn = false
 
     @Synchronized
     fun init(context: Context) {
         if (::appContext.isInitialized) return
         appContext = context.applicationContext
+        HiddenDisplay.init(appContext)
+        HiddenDisplay.onLeakMoved = { returnToComposer() }
         tools = Tools(appContext)
+        val config = AgentConfig.load(appContext)
+        model = config.model
+        _effort.value = config.effort
     }
 
     private fun agent(): Agent {
@@ -75,7 +90,8 @@ object AgentHub {
             ?: throw IllegalStateException("No API key on the phone: run provision.sh.")
         val client = AnthropicOkHttpClient.builder().apiKey(key).build()
         val transcript = Transcript(File(appContext.filesDir, "transcripts"))
-        return Agent(client, AgentConfig.load(appContext), tools, hooks, transcript).also { agent = it }
+        val config = AgentConfig.load(appContext).also { it.effort = _effort.value }
+        return Agent(client, config, tools, hooks, transcript).also { agent = it; agentConfig = config }
     }
 
     /** Queue a user message. `requestId` makes the reply readable from replies.jsonl (debug driver). */
@@ -83,6 +99,7 @@ object AgentHub {
         current = scope.launch {
             lock.withLock {
                 this@AgentHub.autoApprove = autoApprove
+                suppressReturn = false
                 if (fresh) newConversation()
                 add(ChatItem.User(ids.incrementAndGet(), text))
                 _busy.value = true
@@ -112,12 +129,26 @@ object AgentHub {
                 add(ChatItem.Reply(ids.incrementAndGet(), reply, cost, (System.currentTimeMillis() - started) / 1000.0))
                 _busy.value = false
                 requestId?.let { recordReply(it, reply, cost, requests, (System.currentTimeMillis() - started) / 1000.0) }
-                returnToComposer()
+                if (!suppressReturn) {
+                    returnToComposer()
+                    HiddenDisplay.park()
+                }
             }
         }
     }
 
     fun stop() {
+        current?.cancel()
+    }
+
+    fun setEffort(level: String) {
+        _effort.value = level
+        agentConfig?.effort = level
+    }
+
+    /** The user is taking over the hidden app (touching it in the viewer, or bringing it to the front): stop the agent. */
+    fun takeOver() {
+        suppressReturn = true
         current?.cancel()
     }
 
@@ -166,7 +197,10 @@ object AgentHub {
         File(appContext.filesDir, "replies.jsonl").appendText(record.toString() + "\n")
     }
 
-    /** The composer is the phone's home: come back to it once a request is done. */
+    /**
+     * The composer is the phone's home: come back to it once a request is done. Apps run on the hidden display, so
+     * this mostly gives the chat back input focus (the hidden display takes it whenever the agent acts there).
+     */
     private fun returnToComposer() {
         appContext.startActivity(
             Intent(appContext, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)

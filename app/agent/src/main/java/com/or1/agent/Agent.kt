@@ -23,7 +23,7 @@ import org.json.JSONObject
 private const val MAX_STEPS = 30
 
 /** System prompt, tool schemas and model settings, exported from the host prototype (proto/scripts/export_agent_json.py). */
-class AgentConfig(val model: String, val effort: String, val system: String, val tools: List<Tool>) {
+class AgentConfig(val model: String, var effort: String, val system: String, val tools: List<Tool>) {
     companion object {
         fun load(context: Context): AgentConfig {
             val root = JSONObject(context.assets.open("agent.json").bufferedReader().readText())
