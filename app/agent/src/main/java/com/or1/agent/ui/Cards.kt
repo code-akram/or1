@@ -19,7 +19,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -169,7 +171,10 @@ fun WorkCard(turn: Turn, active: Boolean, preview: Bitmap?, onOpenPreview: () ->
     var expanded by rememberSaveable(turn.key) { mutableStateOf(false) }
     val calls = turn.toolCalls
     val shape = RoundedCornerShape(20.dp)
-    Row(
+    val showThumbnail = preview != null && turn.usedScreen
+    // The text sets the card's height; the thumbnail fills it (cropped to the top of the work screen), so the
+    // card stays as compact as its content.
+    Box(
         Modifier
             .fillMaxWidth()
             .clip(shape)
@@ -178,7 +183,7 @@ fun WorkCard(turn: Turn, active: Boolean, preview: Bitmap?, onOpenPreview: () ->
             .animateContentSize(tween(220))
             .padding(14.dp),
     ) {
-        Column(Modifier.weight(1f)) {
+        Column(Modifier.fillMaxWidth().padding(end = if (showThumbnail) 62.dp else 0.dp)) {
             Row(
                 Modifier.fillMaxWidth().clickable { expanded = !expanded },
                 verticalAlignment = Alignment.CenterVertically,
@@ -218,20 +223,22 @@ fun WorkCard(turn: Turn, active: Boolean, preview: Bitmap?, onOpenPreview: () ->
                 }
             }
         }
-        if (preview != null && turn.usedScreen) {
-            Spacer(Modifier.width(12.dp))
-            Image(
-                preview.asImageBitmap(),
-                contentDescription = "Work screen. Tap to view.",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .align(Alignment.CenterVertically)
-                    .width(40.dp)
-                    .height(89.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .border(1.dp, Palette.Border, RoundedCornerShape(12.dp))
-                    .clickable(onClick = onOpenPreview),
-            )
+        if (showThumbnail) {
+            Box(Modifier.matchParentSize(), contentAlignment = Alignment.TopEnd) {
+                Image(
+                    preview!!.asImageBitmap(),
+                    contentDescription = "Work screen. Tap to view.",
+                    contentScale = ContentScale.Crop,
+                    alignment = Alignment.TopCenter,
+                    modifier = Modifier
+                        .width(50.dp)
+                        .heightIn(min = 48.dp, max = 111.dp)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(10.dp))
+                        .border(1.dp, Palette.Border, RoundedCornerShape(10.dp))
+                        .clickable(onClick = onOpenPreview),
+                )
+            }
         }
     }
 }
