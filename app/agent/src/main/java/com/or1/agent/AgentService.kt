@@ -40,7 +40,7 @@ class AgentService : Service() {
  * [--ez auto_approve true] [--ez fresh true]`. Guarded by android.permission.DUMP, which only shell and system hold.
  * The reply is appended to files/replies.jsonl under the given id.
  *
- * Hidden display checks: `--es display info|create|launch|tap|back|home|park|snap|front|move|tool [--es name N --es args JSON] [--es pkg P] [--ei x X --ei y Y]
+ * Hidden display checks: `--es display info|create|launch|tap|back|home|park|restore|focus|snap|front|move|tool [--es name N --es args JSON] [--es pkg P] [--ei x X --ei y Y]
  * [--ei task T]`; results go to logcat (tag or1-display) and files/display.txt.
  */
 class DebugReceiver : BroadcastReceiver() {
@@ -72,9 +72,11 @@ private fun displayCommand(context: Context, command: String, intent: Intent) {
                     intent.getIntExtra("x", 0).toFloat().let { x -> intent.getIntExtra("y", 0).toFloat().let { y ->
                         "injected=${HiddenDisplay.injectStroke(x, y, x, y, 50, id)}" } }
                 }
-                "back" -> "focus=${HiddenDisplay.focus()} injected=${HiddenDisplay.injectKey(android.view.KeyEvent.KEYCODE_BACK, HiddenDisplay.ensure()!!)}"
+                "back" -> "injected=${HiddenDisplay.injectKey(android.view.KeyEvent.KEYCODE_BACK, HiddenDisplay.ensure()!!)}"
                 "home" -> { HiddenDisplay.goHome(); "home" }
                 "park" -> { HiddenDisplay.park(); "parked" }
+                "restore" -> { HiddenDisplay.restoreFocus(); "restored" }
+                "focus" -> "focused=${HiddenDisplay.focus()}"
                 "tool" -> debugTools(context).run(intent.getStringExtra("name")!!, org.json.JSONObject(intent.getStringExtra("args") ?: "{}")).text
                 "snap" -> {
                     java.io.File(context.filesDir, "preview.png").outputStream().use {
@@ -100,5 +102,5 @@ private fun debugTools(context: Context) = tools ?: com.or1.agent.tools.Tools(co
 private fun info(): String {
     val id = HiddenDisplay.id ?: return "no hidden display (unavailable=${HiddenDisplay.unavailable})"
     return "display=$id a11y=${HiddenDisplay.accessibilitySees()} top0=${HiddenDisplay.topAppPackage(0)} topN=${HiddenDisplay.topAppPackage(id)} " +
-        "tasksN=${HiddenDisplay.tasksOn(id)} preview=${HiddenDisplay.preview.value?.let { "${it.width}x${it.height}" }}"
+        "tasksN=${HiddenDisplay.tasksOn(id)} tasks0=${HiddenDisplay.tasksOn(0)} preview=${HiddenDisplay.preview.value?.let { "${it.width}x${it.height}" }}"
 }

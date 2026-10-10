@@ -28,7 +28,15 @@ flags need signature permissions, which the platform key grants (see the manifes
   service only subscribes to window events, so scrolls never invalidate it).
 - Its own display group keeps it working while the phone is off or locked. A screen wake lock bound to the
   display keeps it awake during a request; at the end the display is parked (surface removed, apps stop)
-  and the lock released. The IME policy is HIDE, so no keyboard pops up over the chat (LOCAL in the viewer).
+  and the lock released.
+- Focus: AOSP 13 moves a trusted display to the top (and gives it input focus) whenever a task on it comes
+  to the front, which would close the chat's keyboard. Injected touches carry `FLAG_NO_FOCUS_CHANGE`; after
+  launches, and whenever accessibility reports a change on the hidden display, `restoreFocus()` re-starts the
+  real screen's top task, which puts that display back on top (`moveDisplayToTop` isn't on the binder
+  interface in 13, and `setFocusedTask`/`moveTaskToFront` no-op for a display's top task). Keys need focus,
+  so `injectKey` focuses the hidden display for the key and restores it afterwards; the composer reopens the
+  keyboard if that closed it (`HiddenDisplay.focusReturned`). IME policy is FALLBACK (LOCAL in the viewer):
+  HIDE unbinds the IME from every display during those brief focus changes and it never re-binds.
 - `shell` exports `OR1_DISPLAY`; the phone prompt (`proto/scripts/export_agent_json.py`) tells the model to
   use `am start --display $OR1_DISPLAY` and `input -d $OR1_DISPLAY`.
 - Debug: `am broadcast -n com.or1.agent/.DebugReceiver --es display info|create|launch|tap|back|home|park|snap|front|move|tool …`
@@ -73,6 +81,5 @@ Grant logging is off too: `logging` = `false` in the same table, and `logging` =
 
 ## Known limits
 - Calendar events fail: there is no calendar account.
-- While a hidden app has focus, the chat's keyboard closes; the chat gets focus back at the end of a request.
 - FLAG_SECURE screens show black in the thumbnail, viewer and screenshots (the accessibility tree still works).
 - Hidden apps can still play sound.

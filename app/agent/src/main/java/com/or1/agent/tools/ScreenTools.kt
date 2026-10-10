@@ -168,7 +168,6 @@ class ScreenTools(private val context: Context) {
         if (hidden) when (key) {
             // Global actions go to whichever display has focus, so keys for the hidden display are injected there.
             "back" -> {
-                HiddenDisplay.focus()
                 check(HiddenDisplay.injectKey(android.view.KeyEvent.KEYCODE_BACK, HiddenDisplay.targetDisplay())) { "The back key was not delivered." }
                 return
             }

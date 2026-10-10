@@ -1,5 +1,6 @@
 package com.or1.agent.ui
 
+import android.os.SystemClock
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -38,6 +39,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -50,6 +52,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -58,6 +61,7 @@ import com.or1.agent.ChatItem
 import com.or1.agent.NotifListener
 import com.or1.agent.tools.HiddenDisplay
 import java.util.Calendar
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** The phone's home screen: greeting and suggestions when empty, the conversation otherwise, and the composer. */
@@ -90,16 +94,27 @@ fun ChatScreen() {
             onDispose { view.keepScreenOn = false }
         }
 
-        // Back to the pill when the keyboard is dismissed with nothing typed.
+        // Back to the pill when the user dismisses the keyboard with nothing typed. Not when it closed because the
+        // window briefly lost focus to the agent's work display: the composer brings it back (see ComposerCard).
         val imeVisible = WindowInsets.isImeVisible
+        val windowFocused = LocalWindowInfo.current.isWindowFocused
+        var focusLostAt by remember { mutableLongStateOf(0L) }
+        LaunchedEffect(windowFocused) { if (!windowFocused) focusLostAt = SystemClock.uptimeMillis() }
         var imeWasVisible by remember { mutableStateOf(false) }
         LaunchedEffect(imeVisible) {
-            if (imeWasVisible && !imeVisible && text.isBlank()) {
-                expanded = false
-                focusManager.clearFocus()
-            }
+            val wasVisible = imeWasVisible
             imeWasVisible = imeVisible
+            if (wasVisible && !imeVisible && text.isBlank()) {
+                val hiddenAt = SystemClock.uptimeMillis()
+                delay(600) // the focus change is reported around the time the IME hides
+                val focusSteal = kotlin.math.abs(focusLostAt - hiddenAt) < 1500
+                if (!focusSteal && !WindowInsetsHolder.imeVisible) {
+                    expanded = false
+                    focusManager.clearFocus()
+                }
+            }
         }
+        WindowInsetsHolder.imeVisible = imeVisible
 
         fun send(message: String) {
             if (message.isBlank() || busy) return
@@ -289,4 +304,10 @@ private fun Drawer(totalCost: Double, onNewChat: () -> Unit, onOpen: (PastChat) 
             )
         }
     }
+}
+
+/** The latest IME visibility, readable from inside effects that started before it changed. */
+private object WindowInsetsHolder {
+    @Volatile
+    var imeVisible = false
 }

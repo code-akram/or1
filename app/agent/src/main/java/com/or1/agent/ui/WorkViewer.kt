@@ -74,10 +74,7 @@ fun WorkViewer(onClose: () -> Unit) {
         Spacer(Modifier.size(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             ViewerButton(Icons.Back, "Back") {
-                thread {
-                    HiddenDisplay.focus()
-                    HiddenDisplay.id?.let { HiddenDisplay.injectKey(android.view.KeyEvent.KEYCODE_BACK, it) }
-                }
+                thread { HiddenDisplay.id?.let { HiddenDisplay.injectKey(android.view.KeyEvent.KEYCODE_BACK, it) } }
             }
             ViewerButton(Icons.OpenInFront, "Bring to front") {
                 AgentHub.takeOver()

@@ -1,5 +1,6 @@
 package com.or1.agent.ui
 
+import android.os.SystemClock
 import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
@@ -13,7 +14,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -32,6 +36,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,6 +59,9 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import com.or1.agent.tools.HiddenDisplay
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.drop
 
 /** The ways the round primary button can act. */
 private enum class PrimaryAction { VOICE, SEND, STOP }
@@ -128,6 +136,7 @@ fun Composer(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ComposerCard(
     text: String,
@@ -148,6 +157,32 @@ private fun ComposerCard(
     LaunchedEffect(Unit) {
         focus.requestFocus()
         keyboard?.show()
+    }
+    // The agent's work display can briefly take window focus (when an app it drives opens a new screen), and
+    // Android closes the keyboard when that happens. Reopen it as soon as the chat has focus again.
+    // The agent's work display briefly takes focus for some actions (a back key, an app opening a new screen),
+    // and Android closes the keyboard when that happens. When focus is handed back, reopen it if it was up a
+    // moment ago. Focus can leave and return within a frame, so this listens to the hand-back rather than to
+    // window focus.
+    val imeVisible = WindowInsets.isImeVisible
+    val imeVisibleNow by rememberUpdatedState(imeVisible)
+    val focusedNow by rememberUpdatedState(focused)
+    val imeHiddenAt = remember { longArrayOf(0L) }
+    LaunchedEffect(imeVisible) { if (!imeVisible) imeHiddenAt[0] = SystemClock.uptimeMillis() }
+    LaunchedEffect(Unit) {
+        HiddenDisplay.focusReturned.drop(1).collect {
+            // Was the keyboard up just before? (Insets lag, so it may still read as visible here.)
+            val wasUp = imeVisibleNow || SystemClock.uptimeMillis() - imeHiddenAt[0] < 2500
+            if (!focusedNow || !wasUp) return@collect
+            // A request made before the IME has re-bound to this window is dropped, so keep asking for a moment.
+            repeat(8) {
+                delay(200)
+                if (!imeVisibleNow) {
+                    focus.requestFocus()
+                    keyboard?.show()
+                }
+            }
+        }
     }
     val shape = RoundedCornerShape(28.dp)
     Column(
