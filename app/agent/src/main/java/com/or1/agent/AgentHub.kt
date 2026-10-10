@@ -55,6 +55,7 @@ object AgentHub {
     private const val ROUTINE_TRANSCRIPTS = "routine-transcripts"
     private const val NETWORK_WAIT_MS = 2 * 60_000L
     private const val RETRY_DELAY_MS = 30_000L
+    private const val WAKE_SCREEN_AFTER_MS = 15_000L
     private val ids = AtomicLong()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val lock = Mutex()
@@ -227,12 +228,35 @@ object AgentHub {
     /** `failed`: the request errored (API or network), as opposed to finishing or being stopped. */
     private data class Outcome(val reply: String, val cost: Double, val requests: Int, val seconds: Double, val failed: Boolean = false)
 
-    /** Waits until there is a validated network, or [timeoutMs] passes. */
+    /**
+     * Waits until there is a validated network, or [timeoutMs] passes. On the RAVOZ, Wi-Fi doesn't rejoin a network
+     * while the screen is off, so after [WAKE_SCREEN_AFTER_MS] offline this turns the screen on (dim) until it's back.
+     */
+    @Suppress("DEPRECATION") // SCREEN_DIM_WAKE_LOCK and startScan: the only ways to do this, and fine for a system app.
     private suspend fun awaitNetwork(timeoutMs: Long) {
         val cm = appContext.getSystemService(android.net.ConnectivityManager::class.java)
         fun online() = cm.getNetworkCapabilities(cm.activeNetwork)
             ?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
-        withTimeoutOrNull(timeoutMs) { while (!online()) delay(2000) }
+        if (online()) return
+        var screen: android.os.PowerManager.WakeLock? = null
+        try {
+            withTimeoutOrNull(timeoutMs) {
+                val started = System.currentTimeMillis()
+                while (!online()) {
+                    if (screen == null && System.currentTimeMillis() - started > WAKE_SCREEN_AFTER_MS) {
+                        Log.i(TAG, "no network for a routine: waking the screen so Wi-Fi reconnects")
+                        val pm = appContext.getSystemService(android.os.PowerManager::class.java)
+                        screen = pm.newWakeLock(
+                            android.os.PowerManager.SCREEN_DIM_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP, "or1:routine-network",
+                        ).apply { acquire(timeoutMs) }
+                        appContext.getSystemService(android.net.wifi.WifiManager::class.java).startScan()
+                    }
+                    delay(2000)
+                }
+            }
+        } finally {
+            screen?.takeIf { it.isHeld }?.release()
+        }
     }
 
     /** One request through [a]; the caller holds [lock] and has added the user item. */

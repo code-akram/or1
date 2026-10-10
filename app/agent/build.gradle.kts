@@ -7,8 +7,9 @@ plugins {
 }
 
 // AOSP platform test key (public). TrebleDroid is signed with it, so signing the agent with it
-// grants signature-level permissions. Kept outside the repo in ~/.config/or1/.
-val platformKeystore = File(System.getProperty("user.home"), ".config/or1/platform.p12")
+// grants signature-level permissions. Kept outside the repo in ~/.config/or1/ (or OR1_PLATFORM_KEYSTORE). Without it
+// (CI) the build falls back to the normal debug key: fine for unit tests, not for the phone.
+val platformKeystore = File(System.getenv("OR1_PLATFORM_KEYSTORE") ?: (System.getProperty("user.home") + "/.config/or1/platform.p12"))
 
 android {
     namespace = "com.or1.agent"
@@ -34,7 +35,7 @@ android {
 
     buildTypes {
         debug {
-            signingConfig = signingConfigs.getByName("platform")
+            if (platformKeystore.exists()) signingConfig = signingConfigs.getByName("platform")
         }
     }
 

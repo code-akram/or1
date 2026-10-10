@@ -63,6 +63,14 @@ class AudioCheck(private val context: Context) {
         ).joinToString("\n")
     }
 
+    /** Records [seconds] and reports the level and how strong 1 kHz is (`--es audio listen`: is something playing it?). */
+    fun listen(seconds: Double = 2.0): String {
+        val pcm = record(seconds)
+        val tone = goertzel(pcm, TONE_HZ)
+        val neighbours = (goertzel(pcm, 700.0) + goertzel(pcm, 1300.0)) / 2
+        return "level ${"%.1f".format(dbfs(rms(pcm)))} dBFS, 1 kHz ${"%.1f".format(10 * log10(tone / neighbours.coerceAtLeast(1e-9)))} dB over 700/1300 Hz"
+    }
+
     @SuppressLint("MissingPermission") // RECORD_AUDIO is granted by provision.sh.
     private fun record(seconds: Double): ShortArray {
         val min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)

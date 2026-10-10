@@ -1,0 +1,39 @@
+# Unit tests on every push and pull request. Nothing here needs the phone; the on-device eval
+# (proto: uv run or1-eval --target phone) runs from the dev machine.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  app:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      # The runner has the Android SDK; AGP fetches the compileSdk platform if it's missing. Without the
+      # platform key the debug build uses the normal debug key (agent/build.gradle.kts).
+      - run: ./gradlew --no-daemon :agent:testDebugUnitTest
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-test-reports
+          path: app/agent/build/reports/tests/
+
+  proto:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: proto
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv run pytest -q

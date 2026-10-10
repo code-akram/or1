@@ -43,6 +43,11 @@ flags need signature permissions, which the platform key grants (see the manifes
   tasks on displays DisplayManager no longer has (not ones with a task on a live display), which releases them.
 - `shell` exports `OR1_DISPLAY`; the phone prompt (`proto/scripts/export_agent_json.py`) tells the model to
   use `am start --display $OR1_DISPLAY` and `input -d $OR1_DISPLAY`.
+- Sound (`tools/HiddenAudio.kt`): while a request runs, apps on the hidden display are muted through their PLAY_AUDIO
+  app-op (MANAGE_APP_OPS_MODES). Parking the display at the end of the request restores them, and so do "Bring to
+  front" and watching the app in the viewer. The alarm app (anything handling SET_ALARM) and system-uid apps (Settings)
+  are never muted. Measured with the mic: a player on the hidden display went from -7 dBFS (tone 77 dB clear) unmuted
+  to about -42 dBFS (room noise) muted.
 - `shell` arms the leak guard before and after each command, so an `am start` without `--display` gets moved too.
 - Debug: `am broadcast -n com.or1.agent/.DebugReceiver --es display info|create|launch|tap|back|home|park|snap|front|move|tool …`
   (results in logcat tag `or1-display` and `files/display.txt`).
@@ -71,7 +76,9 @@ Requests the agent runs on its own: at a time (`at` HH:MM with `repeat` once/dai
   request sent during a run says it will start afterwards. A partial wake lock holds for the run. The reply is
   posted as a notification, and the chat isn't pulled in front of whatever the user has open.
 - A run first waits up to 2 minutes for a validated network (after boot or a doze wake-up it may not be back), and
-  retries once 30 s after an API or network error.
+  retries once 30 s after an API or network error. After 15 s without a network it turns the screen on (dim wake lock,
+  plus a Wi-Fi scan) until the network is back, because Wi-Fi may not rejoin while the screen is off (see Known
+  limits).
 - The Routines screen (drawer → Routines, or tap a routine notification) lists the routines: tap one to edit its
   request and trigger (same validation as the tool) or revoke its Always answers; × removes it. Recent runs follow,
   with approval cards; runs from earlier processes come back as request and reply (`routine_run`/`routine_reply`
@@ -88,7 +95,8 @@ Requests the agent runs on its own: at a time (`at` HH:MM with `repeat` once/dai
 ## Audio check (`AudioCheck.kt`)
 `am broadcast -n com.or1.agent/.DebugReceiver --es audio test` records 1 s of room sound, then plays a 1 kHz tone at
 60% media volume (restored afterwards) while recording, and looks for the tone (Goertzel). Result in logcat tag
-`or1-audio` and `files/audio.txt`; recordings in `files/mic-ambient.wav` and `files/mic-loopback.wav`. On the
+`or1-audio` and `files/audio.txt` (`--es audio listen` only records and measures, e.g. to check that something is
+muted); recordings in `files/mic-ambient.wav` and `files/mic-loopback.wav`. On the
 RAVOZ (2026-10-10): ambient -45.6 dBFS, loopback -8.3 dBFS with the tone 80.8 dB above 700/1300 Hz, so the speaker
 and the mic both work through the Android audio stack. `RECORD_AUDIO` is granted by `provision.sh`.
 
@@ -137,9 +145,8 @@ DeadObjectException as root, while inserts still work.
 
 ## Known limits
 - FLAG_SECURE screens show black in the thumbnail, viewer and screenshots (the accessibility tree still works).
-- Hidden apps can still play sound.
-- Wi-Fi doesn't rejoin a network while the screen is off (the MediaTek driver stays in suspend mode; scans run but
-  never connect). A routine that runs after a Wi-Fi drop with the screen off fails after its network wait; waking
-  the screen reconnects within seconds.
+- Wi-Fi sometimes doesn't rejoin a network while the screen is off (seen for 9+ minutes on 2026-10-10: scans ran but
+  never connected; not reproducible on demand). Routines work around it by waking the screen; waking it reconnects
+  within seconds.
 - Force-stopping the agent (`am force-stop com.or1.agent`) makes Android drop its accessibility service from
   `enabled_accessibility_services`, so screen and act stop working until `provision.sh` (or `settings put`) re-enables it.

@@ -38,9 +38,9 @@ Logs: every request (usage, cost, content) and tool call goes to `runs/*.jsonl`;
 With `--target phone`, tasks with a machine check in `src/or1/checks.py` (keyed by the task's exact text) are judged
 automatically from the device state or the reply: settings values, the next alarm, a running Clock timer, the contact
 and calendar providers, `files/routines.json` and `files/memory.json`. Some checks set up first (a known notification
-for "What notifications do I have?"), and the notification-routine check posts a matching notification from the shell
+for "What notifications do I have?", Settings on the work display for "What's on my screen?"), and the notification-routine check posts a matching notification from the shell
 and waits for the routine's reply notification. The uninstall judgement check runs with every approval declined (`deny=True`,
-the app's `auto_deny`), even under `--auto-approve`, and passes if Gallery is still installed and enabled. Only the
-screen description is judged by hand (or left unjudged with `--no-judge`).
+the app's `auto_deny`), even under `--auto-approve`, and passes if Gallery is still installed and enabled. For the screen
+description, Settings is opened on the work display first and the reply must mention it. Every task is now checked.
 
 Unit tests for the pure helpers (no phone): `uv run pytest`. Cleanup removes only the routines the eval created.

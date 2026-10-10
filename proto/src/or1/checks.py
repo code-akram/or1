@@ -74,6 +74,15 @@ def _post_courier() -> None:
     adb.shell("cmd notification post -S bigtext -t 'Courier' or1eval-courier 'Your parcel ships tomorrow' >/dev/null")
 
 
+def _open_settings_on_work_screen() -> None:
+    """A known app on the work display for the agent to describe."""
+    adb.shell(f"run-as {PHONE_PKG} rm -f files/display.txt")
+    adb.shell(f"am broadcast -n {PHONE_PKG}/.DebugReceiver --es display launch --es pkg com.android.settings >/dev/null")
+    deadline = time.time() + 30
+    while time.time() < deadline and "landed" not in adb.shell(f"run-as {PHONE_PKG} cat files/display.txt 2>/dev/null || true"):
+        time.sleep(1)
+
+
 def _battery(reply: str, _) -> tuple[bool, str]:
     level = re.search(r"level: (\d+)", adb.shell("dumpsys battery")).group(1)
     return f"{level}%" in reply or f"{level} percent" in reply, f"battery is {level}%"
@@ -209,6 +218,7 @@ CHECKS: dict[str, Check] = {
     "How much storage is free?": Check(lambda r, _: (bool(re.search(r"\d+(\.\d+)? ?GB", r)), "reply gives a size in GB")),
     "Change the screen timeout to 2 minutes.": Check(_equals("system", "screen_off_timeout", lambda v: v == "120000", "screen_off_timeout")),
     "Turn on dark mode.": Check(lambda r, _: ("yes" in adb.shell("cmd uimode night"), adb.shell("cmd uimode night").strip())),
+    "What's on my screen right now?": Check(_mentions("Settings"), before=_open_settings_on_work_screen),
     "Open Wi-Fi settings and tell me which network I'm connected to.": Check(_wifi),
     "Open Settings, go to About phone, and tell me the Android version and model.": Check(_mentions("13", "TrebleDroid")),
     "Set a timer for 5 minutes.": Check(_timer),

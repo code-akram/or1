@@ -90,6 +90,7 @@ object HiddenDisplay {
 
     fun init(context: Context) {
         this.context = context.applicationContext
+        HiddenAudio.init(this.context)
     }
 
     val id: Int? get() = display?.display?.displayId
@@ -173,6 +174,7 @@ object HiddenDisplay {
         display?.surface = null
         parked = true
         wakeLock?.takeIf { it.isHeld }?.release()
+        HiddenAudio.unmuteAll()
     }
 
     private var wakeLock: android.os.PowerManager.WakeLock? = null
@@ -205,6 +207,7 @@ object HiddenDisplay {
         reader?.surface?.let { display?.surface = it }
         // Give the apps a moment to resume and redraw before tools read the screen.
         Thread.sleep(400)
+        id?.let { HiddenAudio.mute(topAppPackage(it)) }
     }
 
     // --- Leak guard ---------------------------------------------------------------------------------------------
@@ -223,6 +226,9 @@ object HiddenDisplay {
      */
     fun onWindowsChanged(displayId: Int) {
         if (displayId != Display.DEFAULT_DISPLAY && displayId == id && !deliveringKey) {
+            // Whatever runs here stays quiet unless the user is watching (launches by open, clock and shell all land
+            // here, and so do apps' own new screens).
+            if (!viewerAttached) HiddenAudio.mute(topAppPackage(displayId))
             // Something on the hidden display came to the front (e.g. the app opened a new screen), which moves the
             // display to the top and takes focus from the chat. Hand it straight back.
             handler.removeCallbacks(restoreFocusRunnable)
@@ -337,6 +343,8 @@ object HiddenDisplay {
         viewerAttached = true
         parked = false
         setImePolicy(IME_LOCAL)
+        // The user is watching: let the app be heard.
+        id?.let { HiddenAudio.unmute(topAppPackage(it)) }
     }
 
     @Synchronized
@@ -344,6 +352,7 @@ object HiddenDisplay {
         viewerAttached = false
         reader?.surface?.let { display?.surface = it }
         setImePolicy(IME_FALLBACK)
+        id?.let { HiddenAudio.mute(topAppPackage(it)) }
     }
 
     // --- Launching ----------------------------------------------------------------------------------------------
@@ -505,8 +514,9 @@ object HiddenDisplay {
 
     /** Moves the hidden display's top task to the real screen; the agent stops tracking it. */
     fun bringToFront(): Boolean {
-        val task = tasksOn(id ?: return false).firstOrNull()?.first ?: return false
+        val (task, pkg) = tasksOn(id ?: return false).firstOrNull() ?: return false
         currentPackage = null
+        HiddenAudio.unmute(pkg)
         return moveTaskToDisplay(task, Display.DEFAULT_DISPLAY)
     }
 
