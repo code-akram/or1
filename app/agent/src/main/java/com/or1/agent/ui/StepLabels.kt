@@ -58,7 +58,7 @@ object StepLabels {
     }
 
     private fun target(args: JSONObject, elementLabel: (Int) -> String): String =
-        if (args.has("element")) "“${elementLabel(args.getInt("element"))}”" else "the screen at ${args.optInt("x")},${args.optInt("y")}"
+        if (args.has("element")) elementLabel(args.getInt("element")) else "the screen at ${args.optInt("x")},${args.optInt("y")}"
 
     private fun appName(pkg: String): String = when (pkg) {
         "com.android.settings" -> "Settings"

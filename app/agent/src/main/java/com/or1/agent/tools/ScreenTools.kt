@@ -31,7 +31,7 @@ private const val SETTLE_MS = 1000L
  * or the current app refused it.
  */
 class ScreenTools(private val context: Context) {
-    private class Element(val node: AccessibilityNodeInfo, val x: Int, val y: Int, val label: String)
+    private class Element(val node: AccessibilityNodeInfo, val x: Int, val y: Int, val label: String, val cls: String)
 
     /** Element ids from the most recent screen read; `act` resolves against this. */
     private val elements = mutableMapOf<Int, Element>()
@@ -39,7 +39,28 @@ class ScreenTools(private val context: Context) {
     private fun service(): A11yService =
         A11yService.instance ?: throw IllegalStateException("The accessibility service is not enabled (run provision.sh).")
 
-    fun labelOf(id: Int): String = elements[id]?.label?.take(40) ?: "?"
+    /**
+     * How the chat names element [id]: its label in quotes, else the first text inside it (a Settings row is an
+     * unlabeled layout around its title), else its kind ("an unlabeled button").
+     */
+    fun labelOf(id: Int): String {
+        val element = elements[id] ?: return "element $id"
+        val label = element.label.ifBlank { firstText(element.node, depth = 3).orEmpty() }
+        if (label.isNotBlank()) return "“${label.take(40)}”"
+        val kind = if (element.cls == "View" || element.cls.endsWith("Layout") || element.cls.endsWith("Group")) "element"
+            else element.cls.replace(Regex("(?<=[a-z])(?=[A-Z])"), " ").lowercase()
+        return "an unlabeled $kind"
+    }
+
+    private fun firstText(node: AccessibilityNodeInfo, depth: Int): String? {
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val text = child.text?.toString()?.trim().orEmpty().ifEmpty { child.contentDescription?.toString()?.trim().orEmpty() }
+            if (text.isNotEmpty()) return text
+            if (depth > 1) firstText(child, depth - 1)?.let { return it }
+        }
+        return null
+    }
 
     fun dismissShade() {
         A11yService.instance?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
@@ -117,7 +138,7 @@ class ScreenTools(private val context: Context) {
             "disabled".takeIf { !node.isEnabled }, "password".takeIf { node.isPassword },
         )
         val id = elements.size + 1
-        val element = Element(node, bounds.centerX(), bounds.centerY(), label)
+        val element = Element(node, bounds.centerX(), bounds.centerY(), label, cls)
         elements[id] = element
         lines += "[$id] $cls '${label.take(80)}' @${element.x},${element.y} ${flags.joinToString(" ")}".trimEnd()
     }
