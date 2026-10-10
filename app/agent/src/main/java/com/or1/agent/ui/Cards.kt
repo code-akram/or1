@@ -96,7 +96,10 @@ fun groupTurns(items: List<ChatItem>): List<Turn> {
 fun UserBubble(item: ChatItem.User) {
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
         // A routine's request: say what started it, since the user didn't just type it.
-        item.source?.let { Text("Routine · $it", style = Type.Caption, modifier = Modifier.padding(end = 8.dp, bottom = 4.dp)) }
+        item.source?.let {
+            val label = if (it.startsWith("From a routine")) it else "Routine · $it"
+            Text(label, style = Type.Caption, modifier = Modifier.padding(end = 8.dp, bottom = 4.dp))
+        }
         Text(
             item.text,
             style = Type.Body,
@@ -314,7 +317,16 @@ fun ApprovalCard(item: ChatItem.Approval, onDecide: (Decision) -> Unit) {
                 PillButton("Allow", Palette.Primary, Palette.OnPrimary) { onDecide(Decision.ALLOW) }
             }
             Decision.DENY -> DecisionLine(Icons.Close, "Denied", Palette.Error)
-            Decision.ALWAYS -> DecisionLine(Icons.Check, "Always allowed in this chat", Palette.Success)
+            Decision.ALWAYS -> DecisionLine(
+                Icons.Check,
+                when {
+                    !item.forRoutine -> "Always allowed in this chat"
+                    // AgentHub never keeps a standing shell grant for a routine.
+                    item.detail.startsWith("shell ") -> "Allowed this once (never always for shell in a routine)"
+                    else -> "Always allowed for this routine"
+                },
+                Palette.Success,
+            )
             Decision.ALLOW -> DecisionLine(Icons.Check, "Allowed", Palette.Success)
         }
     }

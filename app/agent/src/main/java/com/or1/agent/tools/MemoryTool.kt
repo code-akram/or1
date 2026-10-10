@@ -31,9 +31,9 @@ class MemoryTool(context: Context) {
         return (0 until notes.length()).joinToString("\n") { "$it. ${notes.getString(it)}" }
     }
 
-    /** "The user prefers X." and "User prefers x" are the same note. */
-    private fun sameNote(a: String, b: String) = normalize(a) == normalize(b)
-
-    private fun normalize(note: String) =
-        note.lowercase().replace(Regex("[^a-z0-9 ]"), "").trim().removePrefix("the ").removePrefix("user ").replace(Regex(" +"), " ")
+    private fun sameNote(a: String, b: String) = normalizeNote(a) == normalizeNote(b)
 }
+
+/** "The user prefers X." and "User prefers x" are the same note. */
+internal fun normalizeNote(note: String) =
+    note.lowercase().replace(Regex("[^a-z0-9 ]"), "").trim().removePrefix("the ").removePrefix("user ").replace(Regex(" +"), " ")

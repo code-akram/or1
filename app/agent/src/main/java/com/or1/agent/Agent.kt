@@ -98,6 +98,13 @@ class Agent(
         openCalls = emptyList()
     }
 
+    /** Adds an exchange that happened elsewhere (a routine run) as context, so the next message can follow up on it. */
+    fun addContext(user: String, assistant: String) {
+        messages += MessageParam.builder().role(MessageParam.Role.USER).content(user).build()
+        messages += MessageParam.builder().role(MessageParam.Role.ASSISTANT).content(assistant).build()
+        transcript.log(JSONObject().put("user", user).put("context_reply", assistant))
+    }
+
     private suspend fun loop(start: Int): String {
         // No cache_control: this account applies automatic 1-hour caching server-side, and adding our own
         // breakpoints conflicts with it (TTL mismatch, then the 4-breakpoint limit).

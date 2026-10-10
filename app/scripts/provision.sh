@@ -40,7 +40,7 @@ adb shell "
   cmd notification allow_dnd $PKG"
 
 echo "== runtime permissions, battery exemption, home role"
-for p in POST_NOTIFICATIONS BLUETOOTH_CONNECT ACCESS_FINE_LOCATION READ_CALENDAR WRITE_CALENDAR READ_CONTACTS WRITE_CONTACTS; do adb shell pm grant $PKG android.permission.$p; done
+for p in POST_NOTIFICATIONS BLUETOOTH_CONNECT ACCESS_FINE_LOCATION READ_CALENDAR WRITE_CALENDAR READ_CONTACTS WRITE_CONTACTS RECORD_AUDIO; do adb shell pm grant $PKG android.permission.$p; done
 adb shell cmd deviceidle whitelist +$PKG >/dev/null
 # Etar (the calendar app, from F-Droid) starts a foreground service for reminders, which Android blocks from the background.
 adb shell "pm path ws.xsoh.etar >/dev/null && cmd deviceidle whitelist +ws.xsoh.etar >/dev/null" || true

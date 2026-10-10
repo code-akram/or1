@@ -53,6 +53,8 @@ object History {
         chat.file.forEachLine { line ->
             val record = runCatching { JSONObject(line) }.getOrNull() ?: return@forEachLine
             record.optString("user").takeIf { it.isNotEmpty() }?.let { items += ChatItem.User(id++, it) }
+            // A routine run carried into the chat (AgentHub.continueInChat).
+            record.optString("context_reply").takeIf { it.isNotEmpty() }?.let { items += ChatItem.Reply(id++, it, 0.0, 0.0) }
             val content = record.optJSONObject("response")?.optJSONArray("content") ?: return@forEachLine
             val text = (0 until content.length()).map { content.getJSONObject(it) }
                 .filter { it.optString("type") == "text" }.joinToString("\n") { it.optString("text") }.trim()

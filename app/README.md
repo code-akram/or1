@@ -72,8 +72,11 @@ Requests the agent runs on its own: at a time (`at` HH:MM with `repeat` once/dai
   posted as a notification, and the chat isn't pulled in front of whatever the user has open.
 - A run first waits up to 2 minutes for a validated network (after boot or a doze wake-up it may not be back), and
   retries once 30 s after an API or network error.
-- The Routines screen (drawer → Routines, or tap a routine notification) lists the routines with a remove button
-  and shows recent runs (the last 300 items, in memory), including approval cards.
+- The Routines screen (drawer → Routines, or tap a routine notification) lists the routines: tap one to edit its
+  request and trigger (same validation as the tool) or revoke its Always answers; × removes it. Recent runs follow,
+  with approval cards; runs from earlier processes come back as request and reply (`routine_run`/`routine_reply`
+  records in the routine transcripts). "Continue in chat" copies a run into the chat and into the chat agent's
+  context (`Agent.addContext`), so the user can follow up there.
 - Changes still need approval. The approval also goes out as a high-priority notification with Deny / Always /
   Allow buttons (`ApprovalReceiver`) in a group of its own (Android otherwise bundles it, collapsed, with the
   agent's ongoing notification), and counts as declined after 15 minutes. Always is remembered per routine
@@ -82,11 +85,19 @@ Requests the agent runs on its own: at a time (`at` HH:MM with `repeat` once/dai
 - Debug: `am broadcast -n com.or1.agent/.DebugReceiver --es routine <id>` runs a routine now; `--es dismiss
   pkg1,pkg2` clears those apps' notifications through the listener (the shell can't clear other apps').
 
+## Audio check (`AudioCheck.kt`)
+`am broadcast -n com.or1.agent/.DebugReceiver --es audio test` records 1 s of room sound, then plays a 1 kHz tone at
+60% media volume (restored afterwards) while recording, and looks for the tone (Goertzel). Result in logcat tag
+`or1-audio` and `files/audio.txt`; recordings in `files/mic-ambient.wav` and `files/mic-loopback.wav`. On the
+RAVOZ (2026-10-10): ambient -45.6 dBFS, loopback -8.3 dBFS with the tone 80.8 dB above 700/1300 Hz, so the speaker
+and the mic both work through the Android audio stack. `RECORD_AUDIO` is granted by `provision.sh`.
+
 ## Build and install
 
 ```sh
 export JAVA_HOME=~/.local/share/jdk/temurin-17.0.20.1+1
 ./gradlew :agent:assembleDebug        # signed with the AOSP platform test key in ~/.config/or1/platform.p12
+./gradlew :agent:testDebugUnitTest    # JVM unit tests: routine scheduling and parsing, note de-duplication, audio maths
 scripts/provision.sh                  # install, API key, accessibility, notification access, HOME role
 ```
 

@@ -140,58 +140,29 @@ object Routines {
     }
 
     private fun add(args: JSONObject): String {
-        val prompt = args.optString("prompt").ifBlank { throw IllegalArgumentException("add needs `prompt`.") }
-        val id = UUID.randomUUID().toString().take(6)
-        val app = args.optString("app").takeIf { it.isNotBlank() }
-        val text = args.optString("text_contains").takeIf { it.isNotBlank() }
-        val at = args.optString("at").takeIf { it.isNotBlank() }
-        val inMinutes = args.optInt("in_minutes", 0)
-        val kinds = listOf(app != null || text != null, at != null, inMinutes > 0).count { it }
-        require(kinds == 1) { "Give exactly one trigger: `at` (HH:MM), `in_minutes`, or a notification match (`app` and/or `text_contains`)." }
-        val zone = ZoneId.systemDefault()
-        val routine = when {
-            app != null || text != null -> Routine(id, prompt, app = app, textContains = text)
-            inMinutes > 0 -> {
-                val next = ZonedDateTime.now(zone).plusMinutes(inMinutes.toLong()).withSecond(0).withNano(0)
-                Routine(id, prompt, next.hour, next.minute, "once", next = next.toInstant().toEpochMilli())
-            }
-            else -> {
-                val time = try {
-                    LocalTime.parse(at!!.trim())
-                } catch (e: DateTimeParseException) {
-                    throw IllegalArgumentException("`at` is HH:MM (24-hour), got '$at'.")
-                }
-                val repeat = args.optString("repeat", "once").ifBlank { "once" }
-                require(repeat in setOf("once", "daily", "weekdays", "weekly")) { "`repeat` is once, daily, weekdays or weekly." }
-                val date = args.optString("date").takeIf { it.isNotBlank() }?.let {
-                    try { LocalDate.parse(it.trim()) } catch (e: DateTimeParseException) { throw IllegalArgumentException("`date` is YYYY-MM-DD, got '$it'.") }
-                }
-                val weekday = (date ?: LocalDate.now(zone)).dayOfWeek.value
-                val base = Routine(id, prompt, time.hour, time.minute, repeat, weekday)
-                val next = if (repeat == "once" && date != null) date.atTime(time).atZone(zone) else nextRun(base, ZonedDateTime.now(zone))
-                require(next.isAfter(ZonedDateTime.now(zone))) { "That time has already passed." }
-                base.copy(next = next.toInstant().toEpochMilli())
-            }
-        }
+        val routine = parseRoutine(args, UUID.randomUUID().toString().take(6), ZonedDateTime.now(ZoneId.systemDefault()))
         synchronized(this) { save(all() + routine) }
         if (!routine.onNotification) schedule(routine)
-        return "Created routine ${routine.id}: ${routine.describe()}: $prompt"
+        return "Created routine ${routine.id}: ${routine.describe()}: ${routine.prompt}"
     }
+
+    /**
+     * Replaces a routine's request and trigger (the Routines screen), keeping its id and Always answers. `args` takes
+     * the same fields as the tool's add. Throws IllegalArgumentException with a readable message on bad input.
+     */
+    fun edit(id: String, args: JSONObject): Routine {
+        val old = get(id) ?: throw IllegalArgumentException("No routine with id $id.")
+        val routine = parseRoutine(args, id, ZonedDateTime.now(ZoneId.systemDefault()), keep = old)
+        cancel(id)
+        synchronized(this) { save(all().map { if (it.id == id) routine else it }) }
+        if (!routine.onNotification) schedule(routine)
+        return routine
+    }
+
+    /** Forgets an Always answer (`tool:action`) given during this routine's runs. */
+    fun revoke(id: String, key: String) = update(id) { it.copy(allowed = it.allowed - key) }
 
     // --- Time triggers ---------------------------------------------------------------------------------------------
-
-    /** The first run strictly after [after]. */
-    private fun nextRun(r: Routine, after: ZonedDateTime): ZonedDateTime {
-        var candidate = after.withHour(r.hour).withMinute(r.minute).withSecond(0).withNano(0)
-        if (!candidate.isAfter(after)) candidate = candidate.plusDays(1)
-        while (when (r.repeat) {
-                "weekdays" -> candidate.dayOfWeek.value > 5
-                "weekly" -> candidate.dayOfWeek.value != r.weekday
-                else -> false
-            }
-        ) candidate = candidate.plusDays(1)
-        return candidate
-    }
 
     private fun pendingIntent(id: String, flags: Int = 0): PendingIntent? = PendingIntent.getBroadcast(
         context, 0,
@@ -287,4 +258,57 @@ class RoutineReceiver : BroadcastReceiver() {
             else -> intent.getStringExtra("id")?.let { Routines.fire(it) }
         }
     }
+}
+
+/**
+ * A routine from the tool's add arguments: `prompt` and exactly one trigger (`at` with optional `repeat`/`date`,
+ * `in_minutes`, or `app`/`text_contains`). `keep` is the routine being edited: its Always answers, last run and (for
+ * weekly ones without a `date`) weekday carry over.
+ */
+internal fun parseRoutine(args: JSONObject, id: String, now: ZonedDateTime, keep: Routine? = null): Routine {
+    val prompt = args.optString("prompt").ifBlank { throw IllegalArgumentException("add needs `prompt`.") }
+    val app = args.optString("app").takeIf { it.isNotBlank() }
+    val text = args.optString("text_contains").takeIf { it.isNotBlank() }
+    val at = args.optString("at").takeIf { it.isNotBlank() }
+    val inMinutes = args.optInt("in_minutes", 0)
+    val kinds = listOf(app != null || text != null, at != null, inMinutes > 0).count { it }
+    require(kinds == 1) { "Give exactly one trigger: `at` (HH:MM), `in_minutes`, or a notification match (`app` and/or `text_contains`)." }
+    val routine = when {
+        app != null || text != null -> Routine(id, prompt, app = app, textContains = text)
+        inMinutes > 0 -> {
+            val next = now.plusMinutes(inMinutes.toLong()).withSecond(0).withNano(0)
+            Routine(id, prompt, next.hour, next.minute, "once", next = next.toInstant().toEpochMilli())
+        }
+        else -> {
+            val time = try {
+                LocalTime.parse(at!!.trim())
+            } catch (e: DateTimeParseException) {
+                throw IllegalArgumentException("`at` is HH:MM (24-hour), got '$at'.")
+            }
+            val repeat = args.optString("repeat", "once").ifBlank { "once" }
+            require(repeat in setOf("once", "daily", "weekdays", "weekly")) { "`repeat` is once, daily, weekdays or weekly." }
+            val date = args.optString("date").takeIf { it.isNotBlank() }?.let {
+                try { LocalDate.parse(it.trim()) } catch (e: DateTimeParseException) { throw IllegalArgumentException("`date` is YYYY-MM-DD, got '$it'.") }
+            }
+            val weekday = date?.dayOfWeek?.value ?: keep?.weekday?.takeIf { it in 1..7 && keep.repeat == "weekly" } ?: now.dayOfWeek.value
+            val base = Routine(id, prompt, time.hour, time.minute, repeat, weekday)
+            val next = if (repeat == "once" && date != null) date.atTime(time).atZone(now.zone) else nextRun(base, now)
+            require(next.isAfter(now)) { "That time has already passed." }
+            base.copy(next = next.toInstant().toEpochMilli())
+        }
+    }
+    return if (keep == null) routine else routine.copy(allowed = keep.allowed, lastRun = keep.lastRun)
+}
+
+/** The first run of a time routine strictly after [after]. */
+internal fun nextRun(r: Routine, after: ZonedDateTime): ZonedDateTime {
+    var candidate = after.withHour(r.hour).withMinute(r.minute).withSecond(0).withNano(0)
+    if (!candidate.isAfter(after)) candidate = candidate.plusDays(1)
+    while (when (r.repeat) {
+            "weekdays" -> candidate.dayOfWeek.value > 5
+            "weekly" -> candidate.dayOfWeek.value != r.weekday
+            else -> false
+        }
+    ) candidate = candidate.plusDays(1)
+    return candidate
 }

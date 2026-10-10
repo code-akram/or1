@@ -37,9 +37,10 @@ class AgentService : Service() {
 
 /**
  * Dev-only remote driver for evals: `am broadcast -n com.or1.agent/.DebugReceiver --es text "..." --es id N
- * [--ez auto_approve true] [--ez fresh true]`. Guarded by android.permission.DUMP, which only shell and system hold.
+ * [--ez auto_approve true | --ez auto_deny true] [--ez fresh true]`. Guarded by android.permission.DUMP, which only shell and system hold.
  * The reply is appended to files/replies.jsonl under the given id. `--es routine ID` runs that routine now;
- * `--es dismiss pkg1,pkg2` clears those apps' notifications (eval cleanup: the shell can't clear other apps').
+ * `--es dismiss pkg1,pkg2` clears those apps' notifications (eval cleanup: the shell can't clear other apps');
+ * `--es audio test` runs the speaker/mic check ([AudioCheck]; result in logcat tag or1-audio and files/audio.txt).
  *
  * Hidden display checks: `--es display info|create|launch|tap|back|home|park|restore|focus|snap|front|move|tool [--es name N --es args JSON] [--es pkg P] [--ei x X --ei y Y]
  * [--ei task T]`; results go to logcat (tag or1-display) and files/display.txt.
@@ -50,12 +51,21 @@ class DebugReceiver : BroadcastReceiver() {
         intent.getStringExtra("display")?.let { displayCommand(context, it, intent); return }
         intent.getStringExtra("routine")?.let { Routines.fire(it); return }
         intent.getStringExtra("dismiss")?.let { NotifListener.dismiss(it.split(',').toSet()); return }
+        if (intent.getStringExtra("audio") == "test") {
+            kotlin.concurrent.thread {
+                val result = try { AudioCheck(context.applicationContext).run() } catch (e: Exception) { "error: $e" }
+                android.util.Log.i("or1-audio", result)
+                java.io.File(context.filesDir, "audio.txt").writeText(result + "\n")
+            }
+            return
+        }
         val text = intent.getStringExtra("text") ?: return
         AgentHub.submit(
             text,
             requestId = intent.getStringExtra("id"),
             autoApprove = intent.getBooleanExtra("auto_approve", false),
             fresh = intent.getBooleanExtra("fresh", false),
+            autoDeny = intent.getBooleanExtra("auto_deny", false),
         )
     }
 }
