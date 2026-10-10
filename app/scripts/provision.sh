@@ -49,6 +49,9 @@ adb shell pm grant com.android.deskclock android.permission.POST_NOTIFICATIONS
 adb shell cmd role add-role-holder android.app.role.HOME $PKG
 # No other way into apps: launcher3 only stayed for its Recents screen, which the lockdown (Lockdown.kt) hides anyway.
 adb shell pm disable-user --user 0 com.android.launcher3 >/dev/null
+# No navigation bar at all (TrebleDroid sets qemu.hw.mainkeys from this at boot): the lockdown leaves it without
+# buttons, and an empty bar still holds the composer off the bottom edge. Takes effect on the next reboot.
+adb shell setprop persist.sys.phh.mainkeys 1
 
 echo "== back to non-root adb"
 adb unroot >/dev/null; sleep 3; adb wait-for-device

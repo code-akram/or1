@@ -56,9 +56,6 @@ object Lockdown {
             if (!prefs.contains(SAVED + key)) prefs.edit().putInt(SAVED + key, Settings.Secure.getInt(resolver, key, -1)).apply()
             Settings.Secure.putInt(resolver, key, locked)
         }
-        // The chat hides the (empty) navigation bar; mark Android's "Viewing full screen, swipe down from the top to
-        // exit" tip as seen, since that swipe is locked too. Only a seen-marker, so it isn't restored on release.
-        Settings.Secure.putString(resolver, "immersive_mode_confirmations", "confirmed")
     }
 
     /** Dev escape hatch: lifts everything and remembers it until [setEnabled] true. */
