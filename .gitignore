@@ -3,3 +3,4 @@
 /logs/
 /.claude/
 brand/out/
+__pycache__/
