@@ -12,7 +12,6 @@ blocks tall, the height of the status bar's digits.
 ### #    #
 ```
 
-
 `make_boot.py` draws it (20 px per block) and builds everything from the stock logo partition, standard library only:
 
 ```sh
