@@ -12,6 +12,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -40,10 +41,10 @@ import java.util.Calendar
 import kotlinx.coroutines.delay
 
 /**
- * The status bar, redrawn: SystemUI draws nothing there (clock and icons are off, see Lockdown), and this rail sits just
- * below it, clear of the camera notch, taking [RAIL_HEIGHT] from the screens under it. Pixel-block modules on a thin
- * rail, in the boot wordmark's style (brand/make_boot.py has the same glyphs):
- * or1 on the left (blocks march while the agent works), a rail, then time, battery level and Wi-Fi bars on the right.
+ * The status bar, redrawn: SystemUI draws nothing there (clock and icons are off, see Lockdown), and this bar sits just
+ * below it, clear of the camera notch, taking [RAIL_HEIGHT] from the screens under it. Pixel blocks, in the boot
+ * wordmark's style (brand/make_boot.py has the same glyphs): or1 on the left (blocks march while the agent works);
+ * time, battery level and Wi-Fi bars on the right.
  */
 @Composable
 fun StatusRail(busy: Boolean, modifier: Modifier = Modifier) {
@@ -64,7 +65,7 @@ fun StatusRail(busy: Boolean, modifier: Modifier = Modifier) {
             verticalAlignment = Alignment.Bottom,
         ) {
             Module { Wordmark(); Marching(busy) }
-            Rail()
+            Spacer(Modifier.weight(1f))
             Module { Glyphs(state.time, Palette.Text) }
             // The battery is just its number: bright while charging, grey otherwise.
             Module { Glyphs(if (state.battery >= 0) "${state.battery}" else "--", if (state.charging) Palette.Text else Palette.TextDim) }
@@ -101,7 +102,7 @@ private fun read(context: Context): RailState {
     return RailState(time, wifiLevel, level, charging)
 }
 
-private val RAIL_HEIGHT: Dp = 26.dp
+private val RAIL_HEIGHT: Dp = 22.dp
 
 private val BLOCK: Dp = 2.dp
 private val GAP: Dp = 6.dp
@@ -114,12 +115,6 @@ private fun Module(content: @Composable RowScope.() -> Unit) {
         verticalAlignment = Alignment.Bottom,
         content = content,
     )
-}
-
-/** The rail between modules: a hairline at the text's mid-height (modules sit on a common bottom line). */
-@Composable
-private fun RowScope.Rail(modifier: Modifier = Modifier.weight(1f)) {
-    Canvas(modifier.padding(bottom = BLOCK * PixelFont.HEIGHT / 2 - 0.5.dp).height(1.dp)) { drawRect(Palette.Border) }
 }
 
 /** Text in the pixel font, bottoms aligned (the x glyph is 3 rows, the rest 5). */
@@ -140,7 +135,7 @@ private fun Glyphs(text: String, color: Color) {
     }
 }
 
-/** The boot wordmark: one square per pixel, on the rail's bottom line, or on its own (the drawer's). */
+/** The boot wordmark: one square per pixel, in the status bar or on its own (the drawer's). */
 @Composable
 fun Wordmark(block: Dp = BLOCK, color: Color = Palette.Text, modifier: Modifier = Modifier) {
     val rows = PixelFont.WORDMARK
@@ -169,7 +164,7 @@ private fun Marching(busy: Boolean) {
     }
 }
 
-/** Four bars, 2 to 5 blocks tall; unlit ones in the rail colour, a cross when not on Wi-Fi. */
+/** Four bars, 2 to 5 blocks tall; unlit ones in the border colour, a cross when not on Wi-Fi. */
 @Composable
 private fun WifiBars(level: Int) {
     if (level < 0) {
@@ -192,15 +187,10 @@ private fun DrawScope.block(col: Int, row: Int, b: Float, color: Color) =
 object PixelFont {
     const val HEIGHT = 5
 
-    /** The wordmark, as on the boot screens: o and r as tall as the digits (5 rows), the 1 twice that, on the same bottom line. */
+    /** The wordmark, as on the boot screens: o, r and 1 as tall as the digits (5 rows). */
     val WORDMARK = listOf(
-        "         #",
-        "        ##",
-        "         #",
-        "         #",
-        "         #",
         "### ###  #",
-        "# # #    #",
+        "# # #   ##",
         "# # #    #",
         "# # #    #",
         "### #    #",

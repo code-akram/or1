@@ -1,21 +1,17 @@
 # Boot screens
 
 From power-on to the chat, the RAVOZ shows nothing but the or1 wordmark: lowercase, square pixel blocks, off-white
-(`#ECEAE4`, the app's text colour) on pure black, centred, the same frame at every stage. The o and r are as tall as
-the status rail's digits (5 blocks); the 1 is twice that, on the same bottom line.
+(`#ECEAE4`, the app's text colour) on pure black, centred, the same frame at every stage. All three letters are 5
+blocks tall, the height of the status bar's digits.
 
 ```
-         #
-        ##
-         #
-         #
-         #
 ### ###  #
-# # #    #
+# # #   ##
 # # #    #
 # # #    #
 ### #    #
 ```
+
 
 `make_boot.py` draws it (20 px per block) and builds everything from the stock logo partition, standard library only:
 
@@ -51,9 +47,9 @@ percentage in the pixel digits. Low battery is the empty outline with one accent
 ## Status bar
 
 SystemUI draws no clock or icons (`Lockdown`: `DISABLE_CLOCK`, `DISABLE_SYSTEM_INFO`, `DISABLE2_SYSTEM_ICONS`); the
-app draws its own rail just below it, clear of the camera notch (`StatusRail.kt`), in the same pixel font:
-`or1 ··· ──────────── 21:14 87 ▂▃▄▅`. The three blocks after the wordmark march in the accent colour while the agent
-works; the battery is its number, bright while charging and grey otherwise; Wi-Fi shows `x` when not connected.
+app draws its own bar just below it, clear of the camera notch (`StatusRail.kt`), in the same pixel font: `or1 ···`
+on the left, `21:14 87 ▂▃▄▅` on the right. The three blocks after the wordmark march in the accent colour while the
+agent works; the battery is its number, bright while charging and grey otherwise; Wi-Fi shows `x` when not connected.
 
 ## Logo partition (needs the Mac)
 
@@ -64,7 +60,7 @@ LK's fastboot, on the Mac:
 
 ```sh
 scp archlinux:code/or1/brand/out/logo.bin ~/or1-logo.bin
-shasum -a 256 ~/or1-logo.bin          # 289303ac92912ba0... (sha256sum brand/out/logo.bin here)
+shasum -a 256 ~/or1-logo.bin          # 3ab0d14a045e99d3... (sha256sum brand/out/logo.bin here)
 adb -s RAV1022V1000265 reboot bootloader
 fastboot devices -l                   # note the RAVOZ's fastboot serial; never run fastboot without -s
 fastboot -s <serial> flash logo ~/or1-logo.bin
@@ -81,7 +77,8 @@ phh's `su`, which breaks the agent's root). So `install_bootanim.py` adds both z
 image with `debugfs`, finds the 4K blocks that changed (8: superblock, group descriptors, bitmaps, inodes, the
 directory, the data), maps them through `system_a`'s dm table onto `super`, and `patch_blocks.sh` writes them on the
 phone, refusing unless every target block still holds the original bytes, and re-reading each after a cache drop.
-Run again after an earlier install, it first hashes `system_a` per MiB on the phone and diffs against what is there.
+Run again after an earlier install, it first hashes `system_a` per MiB on the phone (read from `super` through the dm
+table) and diffs against what is there.
 While `system_a` is mounted, reading it shows blocks 0 and 1 (superblock, group descriptors) as the running ext4 holds
 them, i.e. stale after a patch; check them through `super`, or after a reboot.
 
