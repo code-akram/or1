@@ -2,11 +2,11 @@
 
 From power-on to the chat, the RAVOZ shows nothing but the or1 wordmark: lowercase, square pixel blocks, off-white
 (`#ECEAE4`, the app's text colour) on pure black, centred, the same frame at every stage. All three letters are 5
-blocks tall, the height of the status bar's digits.
+blocks tall, the height of the status bar's digits; the r ends in a one-block drop.
 
 ```
 ### ###  #
-# # #   ##
+# # # # ##
 # # #    #
 # # #    #
 ### #    #
@@ -59,7 +59,7 @@ LK's fastboot, on the Mac:
 
 ```sh
 scp archlinux:code/or1/brand/out/logo.bin ~/or1-logo.bin
-shasum -a 256 ~/or1-logo.bin          # 3ab0d14a045e99d3... (sha256sum brand/out/logo.bin here)
+shasum -a 256 ~/or1-logo.bin          # e2b5035d3681e7a0... (sha256sum brand/out/logo.bin here)
 adb -s RAV1022V1000265 reboot bootloader
 fastboot devices -l                   # note the RAVOZ's fastboot serial; never run fastboot without -s
 fastboot -s <serial> flash logo ~/or1-logo.bin

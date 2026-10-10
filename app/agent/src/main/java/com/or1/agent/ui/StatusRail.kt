@@ -187,10 +187,10 @@ private fun DrawScope.block(col: Int, row: Int, b: Float, color: Color) =
 object PixelFont {
     const val HEIGHT = 5
 
-    /** The wordmark, as on the boot screens: o, r and 1 as tall as the digits (5 rows). */
+    /** The wordmark, as on the boot screens: o, r (with a drop at its end) and 1, as tall as the digits (5 rows). */
     val WORDMARK = listOf(
         "### ###  #",
-        "# # #   ##",
+        "# # # # ##",
         "# # #    #",
         "# # #    #",
         "### #    #",
