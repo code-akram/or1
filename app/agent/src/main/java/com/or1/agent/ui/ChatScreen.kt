@@ -74,6 +74,7 @@ fun ChatScreen() {
         val context = LocalContext.current
         val items by AgentHub.items.collectAsState()
         val conversation by AgentHub.conversation.collectAsState()
+        val alerts by AgentHub.alerts.collectAsState()
         val busy by AgentHub.busy.collectAsState()
         val totalCost by AgentHub.totalCost.collectAsState()
         val effort by AgentHub.effort.collectAsState()
@@ -158,7 +159,19 @@ fun ChatScreen() {
                         onMenu = { scope.launch { drawer.open() } },
                         onNewChat = { AgentHub.newConversation() },
                     )
-                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                    for (alert in alerts) {
+                        AlertBanner(alert, onOpen = { routinesOpen = true }, onDismiss = { AgentHub.dismissAlert(alert.id) })
+                    }
+                    // Tapping empty space closes the keyboard: with the system UI locked down there's no back button.
+                    Box(
+                        Modifier.weight(1f).fillMaxWidth().clickable(
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                            indication = null,
+                        ) {
+                            focusManager.clearFocus()
+                            if (text.isBlank()) expanded = false
+                        },
+                    ) {
                         if (items.isEmpty()) {
                             EmptyState(suggestions, onSuggestion = { send(it.prompt) })
                         } else {
@@ -212,6 +225,28 @@ private fun TopBar(showDot: Boolean, showNewChat: Boolean, onMenu: () -> Unit, o
         }
         Spacer(Modifier.weight(1f))
         if (showNewChat) IconCircle(Icons.NewChat, "New chat", onNewChat, tint = Palette.Text, background = Color.Transparent, size = 48)
+    }
+}
+
+/** A routine result or a routine waiting for approval; tapping opens the Routines screen. */
+@Composable
+private fun AlertBanner(alert: com.or1.agent.Alert, onOpen: () -> Unit, onDismiss: () -> Unit) {
+    Row(
+        Modifier
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(if (alert.approvalId != null) Palette.ApprovalBorder else Palette.Surface)
+            .clickable(onClick = onOpen)
+            .padding(start = 14.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Routine, null, tint = Palette.Text, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(10.dp))
+        // Two lines: the full text is on the Routines screen, a tap away.
+        Text(alert.text, style = Type.Step.copy(color = Palette.Text), maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        // An approval goes away once it's answered (on the Routines screen); results can be dismissed.
+        if (alert.approvalId == null) IconCircle(Icons.Close, "Dismiss", onDismiss, tint = Palette.TextDim, background = Color.Transparent, size = 36)
     }
 }
 

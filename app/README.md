@@ -12,8 +12,8 @@ the chat never leaves the screen.
 - `Composer.kt`: a pill when idle; a card while typing with `+` (new chat, show work screen), the model and
   effort chip, mic (voice is not wired up yet) and the round button (voice placeholder / send / stop).
 - `Cards.kt`: one working card per turn (steps, thinking, live thumbnail of the work display), approval
-  cards, replies in serif. `WorkViewer.kt`: the work display full screen; touching it takes over from the
-  agent, "Bring to front" moves the app to the real screen.
+  cards, replies in serif. `WorkViewer.kt`: the work display full screen, watch-only (no touch
+  forwarding, no moving an app to the real screen: the user doesn't use apps directly; see Lockdown).
 - Fonts: Inter and Source Serif 4 (OFL) in `res/font/`.
 
 ## Hidden work display (`tools/HiddenDisplay.kt`)
@@ -46,8 +46,8 @@ thumbnail, viewer and screenshots instead of black (and screenshots of them go t
 - `shell` exports `OR1_DISPLAY`; the phone prompt (`proto/scripts/export_agent_json.py`) tells the model to
   use `am start --display $OR1_DISPLAY` and `input -d $OR1_DISPLAY`.
 - Sound (`tools/HiddenAudio.kt`): while a request runs, apps on the hidden display are muted through their PLAY_AUDIO
-  app-op (MANAGE_APP_OPS_MODES). Parking the display at the end of the request restores them, and so do "Bring to
-  front" and watching the app in the viewer. The alarm app (anything handling SET_ALARM) and system-uid apps (Settings)
+  app-op (MANAGE_APP_OPS_MODES). Parking the display at the end of the request restores them, and so does watching
+  the app in the viewer (and the debug `--es display front`). The alarm app (anything handling SET_ALARM) and system-uid apps (Settings)
   are never muted. Measured with the mic: a player on the hidden display went from -7 dBFS (tone 77 dB clear) unmuted
   to about -42 dBFS (room noise) muted.
 - `shell` arms the leak guard before and after each command, so an `am start` without `--display` gets moved too.
@@ -86,9 +86,10 @@ Requests the agent runs on its own: at a time (`at` HH:MM with `repeat` once/dai
   with approval cards; runs from earlier processes come back as request and reply (`routine_run`/`routine_reply`
   records in the routine transcripts). "Continue in chat" copies a run into the chat and into the chat agent's
   context (`Agent.addContext`), so the user can follow up there.
-- Changes still need approval. The approval also goes out as a high-priority notification with Deny / Always /
-  Allow buttons (`ApprovalReceiver`) in a group of its own (Android otherwise bundles it, collapsed, with the
-  agent's ongoing notification), and counts as declined after 15 minutes. Always is remembered per routine
+- Changes still need approval. With the system UI locked down, a waiting approval shows as a banner at the top of
+  the chat (with a chime and a buzz; tap it to answer on the Routines screen), and finished runs leave result
+  banners there (the three newest; dismissable). An approval counts as declined after 15 minutes. The notifications
+  with Deny / Always / Allow buttons (`ApprovalReceiver`, own group) are still posted, for when the lockdown is off. Always is remembered per routine
   (`allowed` in the JSON), never for `shell`, and the chat's own Always answers don't apply (a routine may be
   acting on a notification's text).
 - Debug: `am broadcast -n com.or1.agent/.DebugReceiver --es routine <id>` runs a routine now; `--es dismiss
@@ -112,8 +113,8 @@ scripts/provision.sh                  # install, API key, accessibility, notific
 ```
 
 `provision.sh` uses the Mac's ADB server tunnelled to port 5038 and is pinned to `RAV1022V1000265`.
-After an update `PackageReplacedReceiver` brings the chat back to the front; otherwise launcher3's Recents (kept on
-TrebleDroid for Recents, so it isn't disabled) would sit there until the next request.
+After an update `PackageReplacedReceiver` brings the chat back to the front. `provision.sh` disables launcher3 (its
+Recents is no longer reachable; see Lockdown).
 The API key goes over stdin from `~/.config/or1/anthropic-api-key` and is relabelled for the platform
 app's SELinux level (files written by `run-as` aren't readable by platform apps).
 
@@ -146,6 +147,25 @@ Grant logging is off too: `logging` = `false` in the same table, and `logging` =
 Commands with `content query` always run as the platform app: SELinux stops providers from passing a query
 cursor to su's domain (`avc: denied { transfer } … tcontext=u:r:phhsu_daemon`), so those queries die with
 DeadObjectException as root, while inserts still work.
+
+## Lockdown: no direct app access (`Lockdown.kt`)
+The user doesn't use apps on this phone; the agent does. The app closes the system UI's ways into them:
+- `StatusBarManager.disable`/`disable2` (hidden; STATUS_BAR via the platform signature, the kiosk-mode mechanism):
+  no home, back or recents buttons, no notification shade or quick settings (so no Settings gear, tiles or tapping a
+  notification), no heads-up pop-ups, no notification icons. The flags are held against the app's process: they lift
+  if it dies, so a crash can't strand the phone, and they come back when it starts (and on every resume).
+- Secure settings, saved and restored on release: notifications hidden on the lock screen, camera gestures
+  (double-press power) off.
+- launcher3 disabled (`provision.sh`); the viewer is watch-only; no "Bring to front".
+- Notifications reach the user through the chat: other apps' as suggestions and through the agent's notifications
+  tool, routines' as banners (see Routines). The chat makes its own chime, since the lockdown mutes notification
+  sounds.
+- Without a back button, every screen has its own close or back control, and tapping empty chat space closes the
+  keyboard (the keyboard's own hide key also works).
+- Checked on the phone: no nav buttons; pulling the shade (also on the lock screen), the recents key and
+  `cmd statusbar expand-settings` do nothing; the eval passes 30/30 under it.
+- Still reachable: the power menu (power off, restart; its Emergency button), and the keyboard's own settings by
+  long-press. Dev: `am broadcast -n com.or1.agent/.DebugReceiver --es lockdown off|on`.
 
 ## API requests (`Agent.kt`)
 - Streaming: each response is streamed (`createStreaming` folded by `MessageAccumulator`), and its text shows in

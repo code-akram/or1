@@ -38,8 +38,8 @@ import com.or1.agent.tools.HiddenDisplay
 import kotlin.concurrent.thread
 
 /**
- * Full-screen view of the agent's hidden work screen, rendered straight from the display. Touches are forwarded to
- * it (the first one stops the agent: the user is taking over); "Bring to front" moves the app to the real screen.
+ * Full-screen view of the agent's hidden work screen, rendered straight from the display. Watch-only: on this phone
+ * the user doesn't use apps directly (no touch forwarding, no bringing an app to the real screen); the agent does.
  */
 @Composable
 fun WorkViewer(onClose: () -> Unit) {
@@ -58,7 +58,7 @@ fun WorkViewer(onClose: () -> Unit) {
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text("Work screen", style = Type.Label)
-                Text("Touch to take over from or1", style = Type.Caption)
+                Text("What or1 is doing", style = Type.Caption)
             }
         }
         Spacer(Modifier.size(12.dp))
@@ -72,41 +72,12 @@ fun WorkViewer(onClose: () -> Unit) {
             )
         }
         Spacer(Modifier.size(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            ViewerButton(Icons.Back, "Back") {
-                thread { HiddenDisplay.id?.let { HiddenDisplay.injectKey(android.view.KeyEvent.KEYCODE_BACK, it) } }
-            }
-            ViewerButton(Icons.OpenInFront, "Bring to front") {
-                AgentHub.takeOver()
-                onClose()
-                thread { HiddenDisplay.bringToFront() }
-            }
-        }
     }
 }
 
-@Composable
-private fun ViewerButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .clip(CircleShape)
-            .background(Palette.Surface)
-            .border(1.dp, Palette.Border, CircleShape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(icon, null, tint = Palette.Text, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(8.dp))
-        Text(label, style = Type.Label)
-    }
-}
-
-/** Shows the hidden display and forwards touches to it, scaled to its 720x1600 coordinates. */
+/** Shows the hidden display (watch-only). */
 @SuppressLint("ViewConstructor")
 private class WorkSurface(context: Context) : SurfaceView(context), SurfaceHolder.Callback {
-    private var tookOver = false
-
     init {
         // Buffers at the display's own size; the compositor scales them to the view.
         holder.setFixedSize(720, 1600)
@@ -125,20 +96,5 @@ private class WorkSurface(context: Context) : SurfaceView(context), SurfaceHolde
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         HiddenDisplay.detachViewer()
         if (!AgentHub.busy.value) HiddenDisplay.park()
-    }
-
-    @SuppressLint("ClickableViewAccessibility")
-    override fun onTouchEvent(event: MotionEvent): Boolean {
-        val displayId = HiddenDisplay.id ?: return false
-        if (event.actionMasked == MotionEvent.ACTION_DOWN && !tookOver && AgentHub.busy.value) {
-            tookOver = true
-            AgentHub.takeOver()
-        }
-        val copy = MotionEvent.obtain(event)
-        copy.transform(Matrix().apply { setScale(720f / width, 1600f / height) })
-        copy.source = InputDevice.SOURCE_TOUCHSCREEN
-        HiddenDisplay.inject(copy, displayId)
-        copy.recycle()
-        return true
     }
 }

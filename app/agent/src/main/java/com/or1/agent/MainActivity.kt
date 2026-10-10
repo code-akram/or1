@@ -25,6 +25,12 @@ class MainActivity : ComponentActivity() {
         handle(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Cheap; covers a SystemUI restart, which drops the flags.
+        Lockdown.apply()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handle(intent)

@@ -50,6 +50,18 @@ object Notifier {
 
     fun cancel(itemId: Long) = manager.cancel(APPROVAL_ID_BASE + (itemId % 100_000).toInt())
 
+    /**
+     * The sound and buzz for an alert in the chat. With the lockdown's notification alerts off, the system mutes
+     * notification sounds, so the chat makes its own.
+     */
+    fun chime() {
+        runCatching {
+            android.media.RingtoneManager.getRingtone(context, android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION))?.play()
+            context.getSystemService(android.os.Vibrator::class.java)
+                ?.vibrate(android.os.VibrationEffect.createOneShot(150, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+        }
+    }
+
     /** Tapping opens the Routines screen. */
     private fun build(
         channel: String, title: String, text: String, subText: String? = null, group: String,

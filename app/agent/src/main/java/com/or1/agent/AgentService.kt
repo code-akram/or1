@@ -40,6 +40,7 @@ class AgentService : Service() {
  * [--ez auto_approve true | --ez auto_deny true] [--ez fresh true]`. Guarded by android.permission.DUMP, which only shell and system hold.
  * The reply is appended to files/replies.jsonl under the given id. `--es routine ID` runs that routine now;
  * `--el backdate_chat_ms N` makes the chat look idle N ms longer (tests the auto new chat after an hour);
+ * `--es lockdown off|on` lifts or restores the system UI lockdown ([Lockdown]) for development;
  * `--ez stop true` stops the request or routine run in progress (e.g. one waiting on an approval);
  * `--es dismiss pkg1,pkg2` clears those apps' notifications (eval cleanup: the shell can't clear other apps');
  * `--es audio test` runs the speaker/mic check, `--es audio listen` just measures what the mic hears ([AudioCheck];
@@ -54,6 +55,7 @@ class DebugReceiver : BroadcastReceiver() {
         intent.getStringExtra("display")?.let { displayCommand(context, it, intent); return }
         intent.getStringExtra("routine")?.let { Routines.fire(it); return }
         if (intent.getBooleanExtra("stop", false)) { AgentHub.stop(); return }
+        intent.getStringExtra("lockdown")?.let { Lockdown.setEnabled(it != "off"); return }
         intent.getLongExtra("backdate_chat_ms", 0).takeIf { it > 0 }?.let { AgentHub.backdateChat(it); return }
         intent.getStringExtra("dismiss")?.let { NotifListener.dismiss(it.split(',').toSet()); return }
         intent.getStringExtra("audio")?.let { mode ->

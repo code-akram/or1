@@ -48,6 +48,12 @@ sealed interface ChatItem {
 
 enum class Decision { ALLOW, DENY, ALWAYS }
 
+/**
+ * Shown at the top of the chat: with the system UI locked down (see [Lockdown]), this is how routines reach the user.
+ * `approvalId` is set while a routine waits on that approval.
+ */
+data class Alert(val id: Long, val text: String, val approvalId: Long? = null)
+
 /** Process-wide owner of the agent: runs one request at a time and publishes chat items for the UI. */
 object AgentHub {
     private const val TAG = "or1"
@@ -79,6 +85,8 @@ object AgentHub {
     val routineItems: StateFlow<List<ChatItem>> = _routineItems
     private val _routineBusy = MutableStateFlow(false)
     val routineBusy: StateFlow<Boolean> = _routineBusy
+    private val _alerts = MutableStateFlow<List<Alert>>(emptyList())
+    val alerts: StateFlow<List<Alert>> = _alerts
     private val _showRoutines = MutableStateFlow(false)
     /** Set when a routine notification is tapped; the chat opens the Routines screen and calls [routinesShown]. */
     val showRoutines: StateFlow<Boolean> = _showRoutines
@@ -119,9 +127,6 @@ object AgentHub {
     /** The [ChatItem.Draft] the current response is streaming into, if any. */
     @Volatile
     private var draftId: Long? = null
-    /** Set when the user takes over the hidden app, so the chat doesn't jump back in front of it. */
-    @Volatile
-    private var suppressReturn = false
 
     @Synchronized
     fun init(context: Context) {
@@ -134,6 +139,7 @@ object AgentHub {
         model = config.model
         _effort.value = config.effort
         Notifier.init(appContext)
+        Lockdown.init(appContext)
         _routineItems.value = loadRoutineRuns()
         Routines.init(appContext)
     }
@@ -180,7 +186,6 @@ object AgentHub {
                 current = coroutineContext[Job]
                 this@AgentHub.autoApprove = autoApprove
                 this@AgentHub.autoDeny = autoDeny
-                suppressReturn = false
                 // Eval requests (requestId) share one transcript, so they don't flood the drawer's past chats.
                 if (fresh) newConversation(newTranscript = requestId == null)
                 val idle = lastChatEnd > 0 && System.currentTimeMillis() - lastChatEnd > AUTO_NEW_CHAT_MS
@@ -197,10 +202,8 @@ object AgentHub {
                     lastRequestEnd = lastChatEnd
                 }
                 requestId?.let { recordReply(it, reply, cost, requests, seconds) }
-                if (!suppressReturn) {
-                    returnToComposer()
-                    HiddenDisplay.park()
-                }
+                returnToComposer()
+                HiddenDisplay.park()
             }
         }
     }
@@ -218,8 +221,7 @@ object AgentHub {
                 try {
                     autoApprove = false
                     autoDeny = false
-                    suppressReturn = false
-                    this@AgentHub.routine = routine
+                        this@AgentHub.routine = routine
                     current = coroutineContext[Job]
                     val trigger = routine.describe() + if (late) " (late: the phone was off when it was due)" else ""
                     add(ChatItem.User(ids.incrementAndGet(), routine.prompt, source = trigger))
@@ -244,14 +246,13 @@ object AgentHub {
                         JSONObject().put("routine_reply", JSONObject().put("text", outcome.reply).put("cost", outcome.cost).put("seconds", outcome.seconds))
                     )
                     Notifier.reply(trigger, outcome.reply)
+                    alert(Alert(ids.incrementAndGet(), "$trigger: ${outcome.reply}"))
                 } finally {
                     lastRequestEnd = System.currentTimeMillis()
                     this@AgentHub.routine = null
-                    if (!suppressReturn) {
-                        // Hand focus back to whatever is on the real screen rather than pulling the chat in front of it.
-                        HiddenDisplay.restoreFocus()
-                        HiddenDisplay.park()
-                    }
+                    // Hand focus back to the real screen without pulling the chat in front of anything.
+                    HiddenDisplay.restoreFocus()
+                    HiddenDisplay.park()
                     if (wake.isHeld) wake.release()
                 }
             }
@@ -337,12 +338,6 @@ object AgentHub {
         routineConfig?.effort = level
     }
 
-    /** The user is taking over the hidden app (touching it in the viewer, or bringing it to the front): stop the agent. */
-    fun takeOver() {
-        suppressReturn = true
-        current?.cancel()
-    }
-
     /**
      * Clears the chat. [newTranscript]: a fresh agent and transcript file, so the earlier chat stays a separate entry
      * in the menu's past chats (the eval keeps one file instead).
@@ -391,6 +386,20 @@ object AgentHub {
         if (lastChatEnd > 0) lastChatEnd -= ms
     }
 
+    fun dismissAlert(id: Long) = _alerts.update { list -> list.filterNot { it.id == id } }
+
+    /** Clears the routine results (pending approvals stay until answered). */
+    fun clearAlerts() = _alerts.update { list -> list.filter { it.approvalId != null } }
+
+    /** Adds an alert with a chime; keeps the three newest results (pending approvals always stay). */
+    private fun alert(alert: Alert) {
+        _alerts.update { list ->
+            val results = (list.filter { it.approvalId == null } + listOfNotNull(alert.takeIf { it.approvalId == null })).takeLast(3)
+            list.filter { it.approvalId != null } + listOfNotNull(alert.takeIf { it.approvalId != null }) + results
+        }
+        Notifier.chime()
+    }
+
     fun showRoutines() {
         _showRoutines.value = true
     }
@@ -413,10 +422,12 @@ object AgentHub {
             add(item)
             val decision = if (routine == null) item.decision.await() else {
                 Notifier.approvalNeeded(item.id, routine.prompt, item.label)
+                alert(Alert(ids.incrementAndGet(), "A routine is waiting for your OK: ${item.label}", approvalId = item.id))
                 try {
                     withTimeoutOrNull(APPROVAL_TIMEOUT_MS) { item.decision.await() } ?: Decision.DENY
                 } finally {
                     Notifier.cancel(item.id)
+                    _alerts.update { list -> list.filterNot { it.approvalId == item.id } }
                 }
             }
             if (decision == Decision.ALWAYS) {

@@ -47,6 +47,8 @@ adb shell "pm path ws.xsoh.etar >/dev/null && cmd deviceidle whitelist +ws.xsoh.
 # Clock asks for notification permission on first launch, which would block alarm and timer tasks.
 adb shell pm grant com.android.deskclock android.permission.POST_NOTIFICATIONS
 adb shell cmd role add-role-holder android.app.role.HOME $PKG
+# No other way into apps: launcher3 only stayed for its Recents screen, which the lockdown (Lockdown.kt) hides anyway.
+adb shell pm disable-user --user 0 com.android.launcher3 >/dev/null
 
 echo "== back to non-root adb"
 adb unroot >/dev/null; sleep 3; adb wait-for-device
