@@ -94,7 +94,9 @@ fun groupTurns(items: List<ChatItem>): List<Turn> {
 
 @Composable
 fun UserBubble(item: ChatItem.User) {
-    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+        // A routine's request: say what started it, since the user didn't just type it.
+        item.source?.let { Text("Routine · $it", style = Type.Caption, modifier = Modifier.padding(end = 8.dp, bottom = 4.dp)) }
         Text(
             item.text,
             style = Type.Body,

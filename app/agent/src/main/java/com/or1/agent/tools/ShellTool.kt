@@ -7,6 +7,7 @@ import kotlinx.coroutines.withContext
 
 private const val OUTPUT_LIMIT = 4000
 private const val TIMEOUT_SECONDS = 60L
+private val CONTENT_QUERY = Regex("""\bcontent\s+query\b""")
 
 /**
  * Runs a shell command as root when su grants it (phh-su, approved for this app in phh's Superuser app), otherwise as
@@ -16,11 +17,20 @@ class ShellTool {
     private val rootAvailable by lazy { exec(listOf("su", "-c", "id -u"))?.trim() == "0" }
 
     suspend fun run(command: String): String = withContext(Dispatchers.IO) {
-        val who = if (rootAvailable) "root" else "the agent app's uid (no root available)"
+        // SELinux won't let providers pass a query cursor to su's domain (phhsu_daemon), so `content query` fails as
+        // root; the platform app can receive it. Such commands run without su.
+        val asRoot = rootAvailable && !CONTENT_QUERY.containsMatchIn(command)
+        val who = when {
+            asRoot -> "root"
+            rootAvailable -> "the agent app's uid (content query can't return results to root)"
+            else -> "the agent app's uid (no root available)"
+        }
         // The agent's hidden work display, for `am start --display` and `input -d`.
         val script = "export OR1_DISPLAY=${HiddenDisplay.ensure() ?: 0}; $command"
-        val argv = if (rootAvailable) listOf("su", "-c", script) else listOf("sh", "-c", script)
-        val result = exec(argv) ?: "Could not start a shell."
+        // Arm the leak guard: an `am start` without --display opens on the real screen and gets moved over.
+        HiddenDisplay.markActivity()
+        val result = exec(if (asRoot) listOf("su", "-c", script) else listOf("sh", "-c", script)) ?: "Could not start a shell."
+        HiddenDisplay.markActivity()
         val text = if (result.length > OUTPUT_LIMIT) result.take(OUTPUT_LIMIT) + "\n... [truncated, ${result.length} chars total]" else result
         "[ran as $who]\n" + text.ifEmpty { "(no output)" }
     }

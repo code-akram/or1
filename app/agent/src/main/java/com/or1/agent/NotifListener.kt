@@ -5,7 +5,7 @@ import android.service.notification.StatusBarNotification
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
-/** Gives the agent read access to all notifications. Enabled by provision.sh. */
+/** Gives the agent read access to all notifications, and triggers notification routines. Enabled by provision.sh. */
 class NotifListener : NotificationListenerService() {
     override fun onListenerConnected() {
         instance = this
@@ -18,6 +18,7 @@ class NotifListener : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         _changes.value++
+        sbn?.let { Routines.onNotification(it) }
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {

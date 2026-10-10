@@ -40,8 +40,10 @@ adb shell "
   cmd notification allow_dnd $PKG"
 
 echo "== runtime permissions, battery exemption, home role"
-for p in POST_NOTIFICATIONS BLUETOOTH_CONNECT ACCESS_FINE_LOCATION; do adb shell pm grant $PKG android.permission.$p; done
+for p in POST_NOTIFICATIONS BLUETOOTH_CONNECT ACCESS_FINE_LOCATION READ_CALENDAR WRITE_CALENDAR READ_CONTACTS WRITE_CONTACTS; do adb shell pm grant $PKG android.permission.$p; done
 adb shell cmd deviceidle whitelist +$PKG >/dev/null
+# Etar (the calendar app, from F-Droid) starts a foreground service for reminders, which Android blocks from the background.
+adb shell "pm path ws.xsoh.etar >/dev/null && cmd deviceidle whitelist +ws.xsoh.etar >/dev/null" || true
 # Clock asks for notification permission on first launch, which would block alarm and timer tasks.
 adb shell pm grant com.android.deskclock android.permission.POST_NOTIFICATIONS
 adb shell cmd role add-role-holder android.app.role.HOME $PKG

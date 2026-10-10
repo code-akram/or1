@@ -43,8 +43,36 @@ flags need signature permissions, which the platform key grants (see the manifes
   tasks on displays DisplayManager no longer has (not ones with a task on a live display), which releases them.
 - `shell` exports `OR1_DISPLAY`; the phone prompt (`proto/scripts/export_agent_json.py`) tells the model to
   use `am start --display $OR1_DISPLAY` and `input -d $OR1_DISPLAY`.
+- `shell` arms the leak guard before and after each command, so an `am start` without `--display` gets moved too.
 - Debug: `am broadcast -n com.or1.agent/.DebugReceiver --es display info|create|launch|tap|back|home|park|snap|front|move|tool …`
   (results in logcat tag `or1-display` and `files/display.txt`).
+
+## Calendar (`tools/CalendarTool.kt`)
+There's no Google account, so `calendar add` writes to the first visible writable calendar, creating a local
+"Phone" calendar (`ACCOUNT_TYPE_LOCAL`, through the sync-adapter URI) on first use. Etar (`ws.xsoh.etar`
+1.0.57 from F-Droid, SHA-256 `dae01d93…c599`, matching the index) shows and edits it; install it with
+`adb install` and grant READ/WRITE_CALENDAR and POST_NOTIFICATIONS. Etar's reminders start a foreground service
+from the background, so it needs the power-save allowlist (`provision.sh` adds it when Etar is installed). The
+TrebleDroid AOSP Calendar is disabled (`pm disable-user com.android.calendar`): its `EditEventActivity` class is
+missing and it crashes on every add.
+
+## Routines (`Routines.kt`, `Notifier.kt`)
+Requests the agent runs on its own: at a time (`at` HH:MM with `repeat` once/daily/weekdays/weekly, or
+`in_minutes`) or when a notification matches (`app` and/or `text_contains`). The `routines` tool is phone-only
+(the schema is added in `export_agent_json.py`). Stored in `files/routines.json`.
+- Time routines use exact alarms (`USE_EXACT_ALARM`, `RoutineReceiver`). Alarms don't survive a reboot or force
+  stop, so every process start (and `BOOT_COMPLETED`) re-arms them: a one-off that came due meanwhile runs late,
+  a repeating one skips the missed run.
+- Notification routines run from `NotifListener`. Ongoing, group-summary and foreground-service notifications are
+  ignored, an update with the same content doesn't trigger again, and each routine runs at most once a minute.
+  The notification's content goes to the model marked as untrusted data.
+- A run joins the current conversation (so a follow-up has context) and shows as "Routine · …" above its
+  request. A partial wake lock holds for the run. The reply is posted as a notification, and the chat isn't
+  pulled in front of whatever the user has open.
+- Changes still need approval. The card also goes out as a high-priority notification and counts as declined
+  after 15 minutes. Always is remembered per routine (`allowed` in the JSON), never for `shell`, and the chat's
+  own Always answers don't apply (a routine may be acting on a notification's text).
+- Debug: `am broadcast -n com.or1.agent/.DebugReceiver --es routine <id>` runs a routine now.
 
 ## Build and install
 
@@ -68,9 +96,10 @@ cd ../proto && uv run or1-eval --target phone --auto-approve --no-judge
 ```
 
 This drives the on-device agent through `DebugReceiver` (it requires `android.permission.DUMP`, which only
-shell and system hold). Afterwards it clears the Clock app (no test timer or alarm keeps ringing), deletes
-the "Test Person" contact and reinstalls Gallery. With `--auto-approve`, the last task (uninstall Gallery, a
-judgement check meant to be declined) really runs; skip it with `--only`.
+shell and system hold). Afterwards, even if a task crashes, it clears the Clock app (no test timer or alarm
+keeps ringing), deletes the "Test Person" contact and the "Dentist" event, and reinstalls Gallery. With
+`--auto-approve`, the last task (uninstall Gallery, a judgement check meant to be declined) really runs; skip it
+with `--only`.
 
 ## Root
 `shell` runs commands through `su` when it works (checked once per process) and falls back to `sh` as the
@@ -83,7 +112,12 @@ table in `superuser.sqlite`, `notification` = `0` (1 = toast, the default; 2 = n
 Grant logging is off too: `logging` = `false` in the same table, and `logging` = 0 on the agent's
 `uid_policy` row.
 
+Commands with `content query` always run as the platform app: SELinux stops providers from passing a query
+cursor to su's domain (`avc: denied { transfer } … tcontext=u:r:phhsu_daemon`), so those queries die with
+DeadObjectException as root, while inserts still work.
+
 ## Known limits
-- Calendar events fail: there is no calendar account.
 - FLAG_SECURE screens show black in the thumbnail, viewer and screenshots (the accessibility tree still works).
 - Hidden apps can still play sound.
+- Force-stopping the agent (`am force-stop com.or1.agent`) makes Android drop its accessibility service from
+  `enabled_accessibility_services`, so screen and act stop working until `provision.sh` (or `settings put`) re-enables it.

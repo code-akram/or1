@@ -14,12 +14,14 @@ class Tools(context: Context) {
     private val screen = ScreenTools(context)
     private val shell = ShellTool()
     private val memory = MemoryTool(context)
+    private val calendar = CalendarTool(context)
 
     /** Reads and navigation run freely; anything that changes state needs the user's OK. Same rules as proto. */
     fun needsApproval(name: String, args: JSONObject): Boolean = when (name) {
         "screen", "notifications", "apps", "memory", "open" -> false
         "device" -> args.optString("action") == "set"
         "clock" -> args.optString("action") != "next_alarm"
+        "calendar", "routines" -> args.optString("action") != "list"
         "act" -> {
             val action = args.optString("action")
             !(action == "scroll" || (action == "key" && args.optString("key") in NAVIGATION_KEYS))
@@ -48,6 +50,8 @@ class Tools(context: Context) {
         "apps" -> ToolOutput(system.apps(args))
         "shell" -> ToolOutput(shell.run(args.getString("command")))
         "memory" -> ToolOutput(memory.run(args))
+        "calendar" -> ToolOutput(calendar.run(args))
+        "routines" -> ToolOutput(com.or1.agent.Routines.tool(args))
         else -> throw IllegalArgumentException("Unknown tool '$name'.")
     }
 }

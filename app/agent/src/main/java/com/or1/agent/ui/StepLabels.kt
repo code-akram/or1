@@ -45,6 +45,16 @@ object StepLabels {
                 "dismiss_alarm" -> args.optString("label").takeIf { it.isNotBlank() }?.let { "Turn off the “$it” alarm" } ?: "Turn off all alarms"
                 else -> "Checked the next alarm"
             }
+            "calendar" -> when (action) {
+                "add" -> "Add “${args.optString("title").take(40)}” to the calendar on ${args.optString("start").replace('T', ' ')}"
+                "delete" -> "Delete calendar event ${args.optLong("event_id")}"
+                else -> "Checked the calendar"
+            }
+            "routines" -> when (action) {
+                "add" -> "Create a routine: ${routineTrigger(args)}, “${args.optString("prompt").take(60)}”"
+                "remove" -> "Remove routine ${args.optString("id")}"
+                else -> "Checked routines"
+            }
             "notifications" -> "Read notifications"
             "apps" -> if (action == "list") "Listed apps" else "Looked up ${appName(args.optString("package"))}"
             "shell" -> "Run: ${args.optString("command").take(60)}"
@@ -57,6 +67,18 @@ object StepLabels {
         }
     }
 
+    private fun routineTrigger(args: JSONObject): String = when {
+        args.optInt("in_minutes", 0) > 0 -> "in ${durationNoun(args.getInt("in_minutes") * 60)}"
+        args.optString("at").isNotBlank() -> when (args.optString("repeat", "once")) {
+            "daily" -> "every day at ${args.getString("at")}"
+            "weekdays" -> "weekdays at ${args.getString("at")}"
+            "weekly" -> "weekly at ${args.getString("at")}" + (args.optString("date").takeIf { it.isNotBlank() }?.let { " from $it" } ?: "")
+            else -> "at ${args.getString("at")}" + (args.optString("date").takeIf { it.isNotBlank() }?.let { " on $it" } ?: "")
+        }
+        else -> "on notifications" + (args.optString("app").takeIf { it.isNotBlank() }?.let { " from $it" } ?: "") +
+            (args.optString("text_contains").takeIf { it.isNotBlank() }?.let { " containing “$it”" } ?: "")
+    }
+
     private fun target(args: JSONObject, elementLabel: (Int) -> String): String =
         if (args.has("element")) elementLabel(args.getInt("element")) else "the screen at ${args.optInt("x")},${args.optInt("y")}"
 
@@ -64,7 +86,7 @@ object StepLabels {
         "com.android.settings" -> "Settings"
         "com.android.deskclock" -> "Clock"
         "com.android.contacts" -> "Contacts"
-        "com.android.calendar" -> "Calendar"
+        "com.android.calendar", "ws.xsoh.etar" -> "Calendar"
         "com.android.camera2" -> "Camera"
         "com.android.gallery3d" -> "Gallery"
         "com.android.messaging" -> "Messaging"

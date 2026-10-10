@@ -123,6 +123,35 @@ TOOLS = [
         },
     },
     {
+        "name": "calendar",
+        "description": (
+            "Calendar events without touching the UI. list: events from `date` (YYYY-MM-DD, default today) for "
+            "`days` days (default 7), with event ids. add: `title` and `start` (YYYY-MM-DDTHH:MM local time, or "
+            "YYYY-MM-DD for an all-day event); optional `end` (same format) or `duration_minutes` (default 60), "
+            "`location`, `notes`, `reminder_minutes` (an alert that many minutes before). delete: `event_id` from list. "
+            "Use device get first to resolve relative dates like \"next Monday\"."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["list", "add", "delete"]},
+                "date": {"type": "string"},
+                "days": {"type": "integer"},
+                "title": {"type": "string"},
+                "start": {"type": "string"},
+                "end": {"type": "string"},
+                "duration_minutes": {"type": "integer"},
+                "all_day": {"type": "boolean"},
+                "location": {"type": "string"},
+                "notes": {"type": "string"},
+                "reminder_minutes": {"type": "integer"},
+                "event_id": {"type": "integer"},
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "notifications",
         "description": "List current notifications (app package, title, text, posted time).",
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
@@ -184,6 +213,8 @@ def needs_approval(name: str, args: dict) -> bool:
         return args.get("action") == "set"
     if name == "clock":
         return args.get("action") != "next_alarm"
+    if name in ("calendar", "routines"):
+        return args.get("action") != "list"
     if name == "act":
         action = args.get("action")
         return not (action == "scroll" or (action == "key" and args.get("key") in NAVIGATION_KEYS))
@@ -356,6 +387,102 @@ def _clock(args: dict) -> str:
     return _next_alarm()
 
 
+CAL = "content://com.android.calendar"
+LOCAL_CALENDAR = "Phone"
+
+
+def _phone_zone():
+    from zoneinfo import ZoneInfo
+    return ZoneInfo(adb.shell("getprop persist.sys.timezone").strip() or "UTC")
+
+
+def _calendar_rows(out: str) -> list[dict]:
+    """Parse `content query` output ("Row: 0 a=1, b=x") into dicts. Values may contain ", ", so split on known keys."""
+    rows = []
+    for line in out.splitlines():
+        if not line.startswith("Row: "):
+            continue
+        body = line.split(" ", 2)[2]
+        row = {}
+        for part in re.split(r", (?=\w+=)", body):
+            k, _, v = part.partition("=")
+            row[k] = None if v == "NULL" else v
+        rows.append(row)
+    return rows
+
+
+def _calendar_id() -> int:
+    """The first visible calendar we can write to, or a new local "Phone" calendar (same as the phone app)."""
+    out = adb.shell(f"content query --uri {CAL}/calendars --projection _id --where 'visible=1 AND calendar_access_level>=500' --sort _id")
+    if rows := _calendar_rows(out):
+        return int(rows[0]["_id"])
+    uri = f"'{CAL}/calendars?caller_is_syncadapter=true&account_name={LOCAL_CALENDAR}&account_type=LOCAL'"
+    binds = {"account_name": f"s:{LOCAL_CALENDAR}", "account_type": "s:LOCAL", "name": f"s:{LOCAL_CALENDAR}",
+             "calendar_displayName": f"s:{LOCAL_CALENDAR}", "calendar_color": "i:-2525353", "calendar_access_level": "i:700",
+             "ownerAccount": f"s:{LOCAL_CALENDAR}", "visible": "i:1", "sync_events": "i:1",
+             "calendar_timezone": f"s:{_phone_zone().key}"}
+    adb.shell(f"content insert --uri {uri} " + " ".join(f"--bind {k}:{v}" for k, v in binds.items()))
+    return _calendar_id()
+
+
+def _calendar(args: dict) -> str:
+    from datetime import date, datetime, timedelta, timezone
+    zone, action = _phone_zone(), args["action"]
+    if action == "list":
+        start = date.fromisoformat(args["date"]) if args.get("date") else datetime.now(zone).date()
+        days = min(max(args.get("days", 7), 1), 366)
+        begin = int(datetime.combine(start, datetime.min.time(), zone).timestamp() * 1000)
+        end = int(datetime.combine(start + timedelta(days=days), datetime.min.time(), zone).timestamp() * 1000)
+        out = adb.shell(f"content query --uri {CAL}/instances/when/{begin}/{end} "
+                        "--projection event_id:title:begin:end:allDay:eventLocation --sort begin")
+        lines = []
+        for r in _calendar_rows(out):
+            tz = timezone.utc if r["allDay"] == "1" else zone
+            b = datetime.fromtimestamp(int(r["begin"]) / 1000, tz)
+            e = datetime.fromtimestamp(int(r["end"]) / 1000, tz)
+            when = b.strftime("%a %d %b") + " (all day)" if r["allDay"] == "1" else b.strftime("%a %d %b %H:%M") + e.strftime("-%H:%M")
+            loc = f" @ {r['eventLocation']}" if r.get("eventLocation") else ""
+            lines.append(f"- [{r['event_id']}] {when} {r['title'] or ''}{loc}")
+        return "Events (event ids in brackets):\n" + "\n".join(lines) if lines else "No events in that range."
+    if action == "add":
+        title, start = args.get("title"), args.get("start")
+        if not title or not start:
+            raise ValueError("add needs `title` and `start`.")
+        all_day = args.get("all_day") or "T" not in start
+        binds = {"calendar_id": f"i:{_calendar_id()}", "title": f"s:{title}"}
+        if all_day:
+            d = date.fromisoformat(start[:10])
+            until = date.fromisoformat(args["end"][:10]) if args.get("end") else d
+            binds |= {"allDay": "i:1", "eventTimezone": "s:UTC",
+                      "dtstart": f"l:{int(datetime.combine(d, datetime.min.time(), timezone.utc).timestamp() * 1000)}",
+                      "dtend": f"l:{int(datetime.combine(until + timedelta(days=1), datetime.min.time(), timezone.utc).timestamp() * 1000)}"}
+        else:
+            b = datetime.fromisoformat(start).replace(tzinfo=zone)
+            e = datetime.fromisoformat(args["end"]).replace(tzinfo=zone) if args.get("end") else \
+                b + timedelta(minutes=args.get("duration_minutes", 60))
+            if e <= b:
+                raise ValueError("`end` must be after `start`.")
+            binds |= {"eventTimezone": f"s:{zone.key}", "dtstart": f"l:{int(b.timestamp() * 1000)}", "dtend": f"l:{int(e.timestamp() * 1000)}"}
+        for key in ("location", "notes"):
+            if args.get(key):
+                binds[{"location": "eventLocation", "notes": "description"}[key]] = f"s:{args[key]}"
+        adb.shell(f"content insert --uri {CAL}/events " + " ".join(f"--bind {k}:{shlex.quote(v)}" for k, v in binds.items()))
+        where = shlex.quote(f"calendar_id={binds['calendar_id'][2:]} AND dtstart={binds['dtstart'][2:]}")
+        rows = _calendar_rows(adb.shell(f"content query --uri {CAL}/events --projection _id --where {where} --sort '_id DESC'"))
+        if not rows:
+            raise ValueError("The calendar provider did not save the event.")
+        event_id = rows[0]["_id"]
+        if (minutes := args.get("reminder_minutes")) is not None:
+            adb.shell(f"content insert --uri {CAL}/reminders --bind event_id:l:{event_id} --bind minutes:i:{minutes} --bind method:i:1")
+        return f"Added “{title}” (event id {event_id})."
+    if action == "delete":
+        if args.get("event_id") is None:
+            raise ValueError("delete needs `event_id` (see list).")
+        adb.shell(f"content delete --uri {CAL}/events/{int(args['event_id'])}")
+        return f"Deleted event {args['event_id']}."
+    raise ValueError(f"Unknown action {action!r}.")
+
+
 def _notifications() -> str:
     out = adb.shell("dumpsys notification --noredact")
     items, cur = [], None
@@ -435,6 +562,8 @@ def execute(name: str, args: dict) -> str | list:
         return _device_get() if args.get("action") == "get" else _device_set(args.get("setting"), args.get("value"))
     if name == "clock":
         return _clock(args)
+    if name == "calendar":
+        return _calendar(args)
     if name == "notifications":
         return _notifications()
     if name == "apps":

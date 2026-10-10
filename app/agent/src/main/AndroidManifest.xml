@@ -15,12 +15,21 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.WRITE_CONTACTS" />
+    <!-- Routines: exact alarms, and re-arming them after a reboot. -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Signature-level: granted because the APK is signed with the platform key. -->
     <uses-permission android:name="android.permission.WRITE_SETTINGS" />
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
     <uses-permission android:name="android.permission.NETWORK_SETTINGS" />
     <uses-permission android:name="android.permission.BLUETOOTH_PRIVILEGED" />
     <uses-permission android:name="android.permission.START_ACTIVITIES_FROM_BACKGROUND" />
+    <!-- `content` from the agent's own uid (shell runs content query without su; see ShellTool). -->
+    <uses-permission android:name="android.permission.ACCESS_CONTENT_PROVIDERS_EXTERNALLY" tools:ignore="ProtectedPermissions" />
     <!-- Hidden work display (tools/HiddenDisplay.kt): launch onto it, trust it, inject input, move tasks. -->
     <uses-permission android:name="android.permission.INTERNAL_SYSTEM_WINDOW" tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.ADD_TRUSTED_DISPLAY" tools:ignore="ProtectedPermissions" />
@@ -79,6 +88,14 @@
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
+
+        <receiver
+            android:name=".RoutineReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
         <receiver
             android:name=".DebugReceiver"
