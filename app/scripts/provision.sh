@@ -52,8 +52,11 @@ adb shell pm disable-user --user 0 com.android.launcher3 >/dev/null
 # No navigation bar at all (TrebleDroid sets qemu.hw.mainkeys from this at boot): the lockdown leaves it without
 # buttons, and an empty bar still holds the composer off the bottom edge. Takes effect on the next reboot.
 adb shell setprop persist.sys.phh.mainkeys 1
-# Wi-Fi only: no mobile data (the SIM dialog and SIM notifications are handled by the lockdown).
-adb shell svc data disable
+# Wi-Fi only, cellular radio off: airplane mode limited to the cell radio (Wi-Fi and Bluetooth stay on, also after a
+# reboot), mobile data off in case airplane mode is ever turned off, and no airplane icon in the status bar. The SIM
+# dialog and SIM notifications are handled by the lockdown.
+adb shell "settings put global airplane_mode_radios cell,nfc,wimax; cmd connectivity airplane-mode enable; \
+  svc data disable; settings put secure icon_blacklist rotate,headset,airplane"
 
 echo "== back to non-root adb"
 adb unroot >/dev/null; sleep 3; adb wait-for-device

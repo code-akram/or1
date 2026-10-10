@@ -157,7 +157,10 @@ The user doesn't use apps on this phone; the agent does. The app closes the syst
 - Secure settings, saved and restored on release: notifications hidden on the lock screen, camera gestures
   (double-press power) off.
 - launcher3 disabled (`provision.sh`); the viewer is watch-only; no "Bring to front".
-- Wi-Fi only: mobile data off (`provision.sh`). Settings' "Choose SIM for mobile data" dialog, which opened over the
+- Wi-Fi only, cellular radio off (`provision.sh`): airplane mode, limited to the cell radio
+  (`airplane_mode_radios=cell,nfc,wimax`, so Wi-Fi and Bluetooth stay on, checked across a reboot), mobile data off
+  as a fallback, and the airplane icon hidden (`icon_blacklist`). The lock screen still says "Airplane mode" where the
+  carrier name goes. Settings' "Choose SIM for mobile data" dialog, which opened over the
   chat after a boot, is disabled (`SimSelectNotification`, `SimDialogActivity`; also its "SIM cards changed"
   notification), and the phone service's `alert` channel ("SIM not provisioned") is blocked. That package's
   notification permission is system-fixed, so it's blocked per channel through `INotificationManager`
