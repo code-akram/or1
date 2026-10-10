@@ -1,7 +1,7 @@
 """Run the task list one fresh conversation at a time and record success, steps and cost.
 
-Approvals stay interactive unless --auto-approve is given. Success is judged by the
-person watching the phone (or scrcpy), since many tasks have no machine-checkable result.
+Approvals stay interactive unless --auto-approve is given. On the phone, tasks with a machine check
+(checks.py) are judged automatically; the rest by the person watching the phone (or scrcpy).
 """
 
 import argparse
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import anthropic
 
-from . import adb
+from . import adb, checks
 from .agent import RUNS_DIR, Agent
 from .cli import load_api_key, make_hooks
 
@@ -41,11 +41,17 @@ def run_on_phone(task: str, request_id: str, auto_approve: bool) -> dict:
 
 def cleanup_phone_clock() -> None:
     """Undo task side effects: timers and alarms must not ring later (Clock holds only test data on this phone), the
-    test contact and calendar event go, and Gallery comes back if the uninstall judgement check was auto-approved."""
+    test contact (and any empty one the agent made on the way), calendar event, routines and notifications go, and Gallery comes back if the uninstall judgement check
+    was auto-approved."""
+    for r in checks.test_routines():
+        args = shlex.quote(json.dumps({"action": "remove", "id": r["id"]}))
+        adb.shell(f"am broadcast -n {PHONE_PKG}/.DebugReceiver --es display tool --es name routines --es args {args} >/dev/null")
+    # The routine check's notification, routine replies and any Etar reminder from a test event.
+    adb.shell(f"am broadcast -n {PHONE_PKG}/.DebugReceiver --es dismiss com.android.shell,{PHONE_PKG},ws.xsoh.etar >/dev/null")
     adb.shell("pm clear com.android.deskclock >/dev/null; "
               "pm grant com.android.deskclock android.permission.POST_NOTIFICATIONS; "
               "content delete --uri 'content://com.android.contacts/raw_contacts?caller_is_syncadapter=true' "
-              "--where \"display_name='Test Person'\"; "
+              "--where \"display_name='Test Person' OR (display_name IS NULL AND (account_type IS NULL OR account_type='null'))\"; "
               "content delete --uri 'content://com.android.calendar/events?caller_is_syncadapter=true"
               "&account_name=Phone&account_type=LOCAL' --where \"title='Dentist'\"; "
               "pm install-existing --user 0 com.android.gallery3d >/dev/null")
@@ -77,6 +83,8 @@ def main() -> None:
             if selected and i not in selected:
                 continue
             print(f"\n=== Task {i}: {task}")
+            check = checks.CHECKS.get(task) if args.target == "phone" else None
+            snapshot = check.before() if check and check.before else None
             if args.target == "phone":
                 r = run_on_phone(task, f"eval-{int(time.time())}-{i}", args.auto_approve)
                 reply, seconds = r["reply"], r["seconds"]
@@ -94,10 +102,16 @@ def main() -> None:
                 usage = {"requests": agent.usage.requests, "cost": round(agent.usage.cost, 5),
                          "output_tokens": agent.usage.output, "log": str(agent.log_path)}
             print(f"agent> {reply}")
-            verdict = "s" if args.no_judge else ""
-            while verdict not in ("y", "n", "s"):
-                verdict = input("success? [y]es / [n]o / [s]kip: ").strip().lower()
-            record = {"task": i, "text": task, "success": {"y": True, "n": False, "s": None}[verdict],
+            detail = None
+            if check:
+                success, detail = check.after(reply, snapshot)
+                print(f"check: {'PASS' if success else 'FAIL'} ({detail})")
+            else:
+                verdict = "s" if args.no_judge else ""
+                while verdict not in ("y", "n", "s"):
+                    verdict = input("success? [y]es / [n]o / [s]kip: ").strip().lower()
+                success = {"y": True, "n": False, "s": None}[verdict]
+            record = {"task": i, "text": task, "success": success, "check": detail,
                       **usage, "seconds": round(seconds, 1), "reply": reply, "target": args.target}
             results.append(record)
             out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -110,5 +124,7 @@ def main() -> None:
     judged = [r for r in results if r["success"] is not None]
     passed = sum(r["success"] for r in judged)
     total_cost = sum(r["cost"] for r in results)
-    print(f"\n{passed}/{len(judged)} succeeded · ${total_cost:.4f} total · "
-          f"${total_cost / max(len(results), 1):.4f} per task · results in {out_path}")
+    failed = [r["task"] for r in judged if not r["success"]]
+    print(f"\n{passed}/{len(judged)} succeeded ({len(results) - len(judged)} unjudged)"
+          + (f" · failed: {failed}" if failed else "") +
+          f" · ${total_cost:.4f} total · ${total_cost / max(len(results), 1):.4f} per task · results in {out_path}")

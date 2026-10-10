@@ -20,5 +20,20 @@ class MainActivity : ComponentActivity() {
         AgentHub.init(applicationContext)
         startForegroundService(Intent(this, AgentService::class.java))
         setContent { ChatScreen() }
+        handle(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handle(intent)
+    }
+
+    /** A routine notification was tapped: show the Routines screen. */
+    private fun handle(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_SHOW_ROUTINES, false) == true) AgentHub.showRoutines()
+    }
+
+    companion object {
+        const val EXTRA_SHOW_ROUTINES = "show_routines"
     }
 }

@@ -27,8 +27,17 @@ nothing runs if the tunnel is down. The OnePlus on the same ADB server is never 
 | `notifications` | no | list only |
 | `apps` | no | list launchable apps, package info |
 | `shell` | always | escape hatch; uid shell here, root on the phone |
-| `memory` | no | notes in `state/memory.json` |
+| `memory` | no | notes in `state/memory.json`; a note that only differs in case, punctuation or a leading "The user" isn't added twice |
 
 At an approval prompt, `a` allows that tool/action for the rest of the session.
 
 Logs: every request (usage, cost, content) and tool call goes to `runs/*.jsonl`; eval results to `runs/eval-*.jsonl`.
+
+## Eval checks
+
+With `--target phone`, tasks with a machine check in `src/or1/checks.py` (keyed by the task's exact text) are judged
+automatically from the device state or the reply: settings values, the next alarm, a running Clock timer, the contact
+and calendar providers, `files/routines.json` and `files/memory.json`. Some checks set up first (a known notification
+for "What notifications do I have?"), and the notification-routine check posts a matching notification from the shell
+and waits for the routine's reply notification. Only the screen description and the uninstall judgement check are
+judged by hand (or left unjudged with `--no-judge`). Cleanup removes only the routines the eval created.

@@ -20,6 +20,8 @@ import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.util.Locale
 import java.util.UUID
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -91,8 +93,13 @@ object Routines {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Unit>?) = size > 100
     }
 
+    private val _list = MutableStateFlow<List<Routine>>(emptyList())
+    /** The routines, for the Routines screen. */
+    val list: StateFlow<List<Routine>> = _list
+
     fun init(context: Context) {
         this.context = context.applicationContext
+        _list.value = all()
         rescheduleAll()
     }
 
@@ -101,7 +108,10 @@ object Routines {
         JSONArray(file.readText()).let { a -> (0 until a.length()).map { Routine.fromJson(a.getJSONObject(it)) } }
 
     @Synchronized
-    private fun save(routines: List<Routine>) = file.writeText(JSONArray(routines.map { it.toJson() }).toString(1))
+    private fun save(routines: List<Routine>) {
+        file.writeText(JSONArray(routines.map { it.toJson() }).toString(1))
+        _list.value = routines
+    }
 
     @Synchronized
     fun update(id: String, transform: (Routine) -> Routine) = save(all().map { if (it.id == id) transform(it) else it })
@@ -115,12 +125,18 @@ object Routines {
         "add" -> add(args)
         "remove" -> {
             val id = args.optString("id").ifBlank { throw IllegalArgumentException("remove needs `id` (see list).") }
-            val routine = get(id) ?: throw IllegalArgumentException("No routine with id $id.")
-            cancel(id)
-            synchronized(this) { save(all().filter { it.id != id }) }
+            val routine = remove(id) ?: throw IllegalArgumentException("No routine with id $id.")
             "Removed routine $id (${routine.describe()}: ${routine.prompt})."
         }
         else -> throw IllegalArgumentException("Unknown action '$action'.")
+    }
+
+    /** Deletes a routine and its alarm (the tool, or the Routines screen). Returns what was removed. */
+    fun remove(id: String): Routine? {
+        val routine = get(id) ?: return null
+        cancel(id)
+        synchronized(this) { save(all().filter { it.id != id }) }
+        return routine
     }
 
     private fun add(args: JSONObject): String {
@@ -217,6 +233,8 @@ object Routines {
         val r = get(id) ?: return
         if (!r.onNotification) {
             if (r.repeat == "once") {
+                // Its alarm may still be pending (run early from debug or a boot catch-up).
+                cancel(id)
                 synchronized(this) { save(all().filter { it.id != id }) }
             } else {
                 val next = nextRun(r, ZonedDateTime.now(ZoneId.systemDefault())).toInstant().toEpochMilli()

@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import com.or1.agent.AgentHub
 import com.or1.agent.ChatItem
 import com.or1.agent.NotifListener
+import com.or1.agent.Routines
 import com.or1.agent.tools.HiddenDisplay
 import java.util.Calendar
 import kotlinx.coroutines.delay
@@ -76,11 +77,20 @@ fun ChatScreen() {
         val effort by AgentHub.effort.collectAsState()
         val preview by HiddenDisplay.preview.collectAsState()
         val notificationTick by NotifListener.changes.collectAsState()
+        val routines by Routines.list.collectAsState()
+        val showRoutines by AgentHub.showRoutines.collectAsState()
 
         var text by rememberSaveable { mutableStateOf("") }
         var expanded by rememberSaveable { mutableStateOf(false) }
         var viewerOpen by remember { mutableStateOf(false) }
         var pastChat by remember { mutableStateOf<PastChat?>(null) }
+        var routinesOpen by remember { mutableStateOf(false) }
+        LaunchedEffect(showRoutines) {
+            if (showRoutines) {
+                routinesOpen = true
+                AgentHub.routinesShown()
+            }
+        }
         val drawer = rememberDrawerState(DrawerValue.Closed)
         val scope = rememberCoroutineScope()
         val focusManager = LocalFocusManager.current
@@ -130,7 +140,9 @@ fun ChatScreen() {
             drawerContent = {
                 Drawer(
                     totalCost = totalCost,
+                    routineCount = routines.size,
                     onNewChat = { AgentHub.newConversation(); scope.launch { drawer.close() } },
+                    onRoutines = { routinesOpen = true; scope.launch { drawer.close() } },
                     onOpen = { pastChat = it; scope.launch { drawer.close() } },
                     open = drawer.isOpen,
                 )
@@ -171,8 +183,9 @@ fun ChatScreen() {
                         modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 10.dp),
                     )
                 }
-                if (viewerOpen) WorkViewer(onClose = { viewerOpen = false })
                 pastChat?.let { HistoryView(it, onClose = { pastChat = null }) }
+                if (routinesOpen) RoutinesView(onClose = { routinesOpen = false }, onOpenPreview = { viewerOpen = true })
+                if (viewerOpen) WorkViewer(onClose = { viewerOpen = false })
             }
         }
     }
@@ -255,22 +268,27 @@ private fun Conversation(items: List<ChatItem>, busy: Boolean, preview: android.
     ) {
         items(turns, key = { it.key }) { turn ->
             val last = turn === turns.last()
-            val active = last && busy
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.animateItem()) {
-                turn.user?.let { UserBubble(it) }
-                if (turn.steps.isNotEmpty() || (active && turn.approvals.none { it.state == null })) {
-                    WorkCard(turn, active, if (last) preview else null, onOpenPreview)
-                }
-                for (approval in turn.approvals) ApprovalCard(approval) { AgentHub.decide(approval, it) }
-                for (info in turn.infos) InfoLine(info)
-                turn.reply?.let { ReplyBlock(it) }
-            }
+            TurnView(turn, active = last && busy, preview = if (last) preview else null, onOpenPreview, Modifier.animateItem())
         }
     }
 }
 
+/** One request and its work card, approvals, notes and reply (the chat, and the routines thread). */
 @Composable
-private fun Drawer(totalCost: Double, onNewChat: () -> Unit, onOpen: (PastChat) -> Unit, open: Boolean) {
+fun TurnView(turn: Turn, active: Boolean, preview: android.graphics.Bitmap?, onOpenPreview: () -> Unit, modifier: Modifier = Modifier) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = modifier) {
+        turn.user?.let { UserBubble(it) }
+        if (turn.steps.isNotEmpty() || (active && turn.approvals.none { it.state == null })) {
+            WorkCard(turn, active, preview, onOpenPreview)
+        }
+        for (approval in turn.approvals) ApprovalCard(approval) { AgentHub.decide(approval, it) }
+        for (info in turn.infos) InfoLine(info)
+        turn.reply?.let { ReplyBlock(it) }
+    }
+}
+
+@Composable
+private fun Drawer(totalCost: Double, routineCount: Int, onNewChat: () -> Unit, onRoutines: () -> Unit, onOpen: (PastChat) -> Unit, open: Boolean) {
     val context = LocalContext.current
     val chats = remember(open) { if (open) History.list(context) else emptyList() }
     ModalDrawerSheet(drawerContainerColor = Palette.Background, drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp)) {
@@ -283,6 +301,15 @@ private fun Drawer(totalCost: Double, onNewChat: () -> Unit, onOpen: (PastChat) 
                 Icon(Icons.NewChat, null, tint = Palette.Text, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(14.dp))
                 Text("New chat", style = Type.Body)
+            }
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onRoutines).padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Routine, null, tint = Palette.Text, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(14.dp))
+                Text("Routines", style = Type.Body, modifier = Modifier.weight(1f))
+                if (routineCount > 0) Text("$routineCount", style = Type.Caption)
             }
             Spacer(Modifier.height(18.dp))
             Text("Recent", style = Type.Caption, modifier = Modifier.padding(start = 12.dp, bottom = 6.dp))

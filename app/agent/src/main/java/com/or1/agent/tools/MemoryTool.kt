@@ -13,7 +13,12 @@ class MemoryTool(context: Context) {
         val notes = if (file.exists()) JSONArray(file.readText()) else JSONArray()
         when (val action = args.getString("action")) {
             "view" -> Unit
-            "add" -> notes.put(args.optString("text").ifBlank { throw IllegalArgumentException("add needs `text`.") })
+            "add" -> {
+                val text = args.optString("text").ifBlank { throw IllegalArgumentException("add needs `text`.") }
+                val existing = (0 until notes.length()).firstOrNull { sameNote(notes.getString(it), text) }
+                if (existing != null) return "Already noted as $existing. ${notes.getString(existing)}"
+                notes.put(text)
+            }
             "remove" -> {
                 val i = args.optInt("index", -1)
                 require(i in 0 until notes.length()) { "remove needs a valid `index` (see view)." }
@@ -25,4 +30,10 @@ class MemoryTool(context: Context) {
         if (notes.length() == 0) return "No notes yet."
         return (0 until notes.length()).joinToString("\n") { "$it. ${notes.getString(it)}" }
     }
+
+    /** "The user prefers X." and "User prefers x" are the same note. */
+    private fun sameNote(a: String, b: String) = normalize(a) == normalize(b)
+
+    private fun normalize(note: String) =
+        note.lowercase().replace(Regex("[^a-z0-9 ]"), "").trim().removePrefix("the ").removePrefix("user ").replace(Regex(" +"), " ")
 }

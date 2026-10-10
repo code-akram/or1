@@ -66,13 +66,21 @@ Requests the agent runs on its own: at a time (`at` HH:MM with `repeat` once/dai
 - Notification routines run from `NotifListener`. Ongoing, group-summary and foreground-service notifications are
   ignored, an update with the same content doesn't trigger again, and each routine runs at most once a minute.
   The notification's content goes to the model marked as untrusted data.
-- A run joins the current conversation (so a follow-up has context) and shows as "Routine · …" above its
-  request. A partial wake lock holds for the run. The reply is posted as a notification, and the chat isn't
-  pulled in front of whatever the user has open.
-- Changes still need approval. The card also goes out as a high-priority notification and counts as declined
-  after 15 minutes. Always is remembered per routine (`allowed` in the JSON), never for `shell`, and the chat's
-  own Always answers don't apply (a routine may be acting on a notification's text).
-- Debug: `am broadcast -n com.or1.agent/.DebugReceiver --es routine <id>` runs a routine now.
+- Runs have their own thread and agent (fresh conversation each run, transcripts in `files/routine-transcripts/`),
+  so they don't interleave with the chat. Requests still run one at a time (they share the work display); a chat
+  request sent during a run says it will start afterwards. A partial wake lock holds for the run. The reply is
+  posted as a notification, and the chat isn't pulled in front of whatever the user has open.
+- A run first waits up to 2 minutes for a validated network (after boot or a doze wake-up it may not be back), and
+  retries once 30 s after an API or network error.
+- The Routines screen (drawer → Routines, or tap a routine notification) lists the routines with a remove button
+  and shows recent runs (the last 300 items, in memory), including approval cards.
+- Changes still need approval. The approval also goes out as a high-priority notification with Deny / Always /
+  Allow buttons (`ApprovalReceiver`) in a group of its own (Android otherwise bundles it, collapsed, with the
+  agent's ongoing notification), and counts as declined after 15 minutes. Always is remembered per routine
+  (`allowed` in the JSON), never for `shell`, and the chat's own Always answers don't apply (a routine may be
+  acting on a notification's text).
+- Debug: `am broadcast -n com.or1.agent/.DebugReceiver --es routine <id>` runs a routine now; `--es dismiss
+  pkg1,pkg2` clears those apps' notifications through the listener (the shell can't clear other apps').
 
 ## Build and install
 
@@ -95,7 +103,7 @@ run `uv run python scripts/export_agent_json.py` in `proto/`.
 cd ../proto && uv run or1-eval --target phone --auto-approve --no-judge
 ```
 
-This drives the on-device agent through `DebugReceiver` (it requires `android.permission.DUMP`, which only
+Most tasks are checked automatically (see `proto/README.md` → Eval checks). This drives the on-device agent through `DebugReceiver` (it requires `android.permission.DUMP`, which only
 shell and system hold). Afterwards, even if a task crashes, it clears the Clock app (no test timer or alarm
 keeps ringing), deletes the "Test Person" contact and the "Dentist" event, and reinstalls Gallery. With
 `--auto-approve`, the last task (uninstall Gallery, a judgement check meant to be declined) really runs; skip it
@@ -119,5 +127,8 @@ DeadObjectException as root, while inserts still work.
 ## Known limits
 - FLAG_SECURE screens show black in the thumbnail, viewer and screenshots (the accessibility tree still works).
 - Hidden apps can still play sound.
+- Wi-Fi doesn't rejoin a network while the screen is off (the MediaTek driver stays in suspend mode; scans run but
+  never connect). A routine that runs after a Wi-Fi drop with the screen off fails after its network wait; waking
+  the screen reconnects within seconds.
 - Force-stopping the agent (`am force-stop com.or1.agent`) makes Android drop its accessibility service from
   `enabled_accessibility_services`, so screen and act stop working until `provision.sh` (or `settings put`) re-enables it.

@@ -29,6 +29,12 @@ class NotifListener : NotificationListenerService() {
         @Volatile
         var instance: NotifListener? = null
 
+        /** Clears every clearable notification from [packages]. */
+        fun dismiss(packages: Set<String>) {
+            val listener = instance ?: return
+            listener.activeNotifications.filter { it.packageName in packages }.forEach { listener.cancelNotification(it.key) }
+        }
+
         private val _changes = MutableStateFlow(0)
         /** Bumped whenever notifications change, so the chat can refresh its suggestions. */
         val changes: StateFlow<Int> = _changes

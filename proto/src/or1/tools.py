@@ -529,12 +529,21 @@ def _shell(args: dict) -> str:
     return out or "(no output)"
 
 
+def _normalize_note(note: str) -> str:
+    """"The user prefers X." and "User prefers x" are the same note."""
+    text = re.sub(r"[^a-z0-9 ]", "", note.lower()).strip().removeprefix("the ").removeprefix("user ")
+    return re.sub(r" +", " ", text)
+
+
 def _memory(args: dict) -> str:
     notes = json.loads(MEMORY_FILE.read_text()) if MEMORY_FILE.exists() else []
     action = args["action"]
     if action == "add":
         if not args.get("text"):
             raise ValueError("add needs `text`.")
+        for i, note in enumerate(notes):
+            if _normalize_note(note) == _normalize_note(args["text"]):
+                return f"Already noted as {i}. {note}"
         notes.append(args["text"])
     elif action == "remove":
         i = args.get("index")
