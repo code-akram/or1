@@ -42,6 +42,7 @@ object HiddenDisplay {
     private const val PREVIEW_INTERVAL_MS = 500L
 
     private const val FLAG_PUBLIC = 1
+    private const val FLAG_SECURE = 4
     private const val FLAG_OWN_CONTENT_ONLY = 8
     private const val FLAG_SUPPORTS_TOUCH = 64
     private const val FLAG_DESTROY_CONTENT_ON_REMOVAL = 256
@@ -122,7 +123,9 @@ object HiddenDisplay {
         val dpi = context.resources.displayMetrics.densityDpi
         val imageReader = ImageReader.newInstance(size.x, size.y, PixelFormat.RGBA_8888, 3)
         imageReader.setOnImageAvailableListener({ onFrame(it) }, handler)
-        val flags = FLAG_PUBLIC or FLAG_OWN_CONTENT_ONLY or FLAG_TRUSTED or FLAG_SUPPORTS_TOUCH or
+        // SECURE (CAPTURE_SECURE_VIDEO_OUTPUT): FLAG_SECURE windows render here too, instead of black in the thumbnail,
+        // viewer and screenshots.
+        val flags = FLAG_PUBLIC or FLAG_SECURE or FLAG_OWN_CONTENT_ONLY or FLAG_TRUSTED or FLAG_SUPPORTS_TOUCH or
             FLAG_DESTROY_CONTENT_ON_REMOVAL or FLAG_TOUCH_FEEDBACK_DISABLED or FLAG_OWN_DISPLAY_GROUP or FLAG_ALWAYS_UNLOCKED
         val created = context.getSystemService(DisplayManager::class.java).createVirtualDisplay(
             NAME, size.x, size.y, dpi, imageReader.surface, flags,

@@ -378,6 +378,10 @@ object AgentHub {
             return decision != Decision.DENY
         }
 
+        // A routine may be acting on a notification's text: a memory note it writes would steer every later chat.
+        override fun mustApprove(tool: String, args: JSONObject) =
+            routine != null && tool == "memory" && args.optString("action") != "view"
+
         override fun thinking(text: String) = add(ChatItem.Thinking(ids.incrementAndGet(), text.trim()))
 
         override fun toolCall(tool: String, args: JSONObject) =

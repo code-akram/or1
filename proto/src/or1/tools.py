@@ -206,9 +206,12 @@ TOOLS = [
 
 
 def needs_approval(name: str, args: dict) -> bool:
-    """Reads and navigation run freely; anything that changes state needs the user's OK."""
-    if name in ("screen", "notifications", "apps", "memory", "open"):
+    """Reads and navigation run freely; anything that changes state needs the user's OK. `open` with a URI is gated:
+    a URI can carry data out (https://...?q=<notes>) if untrusted text steers the agent; an app or settings page can't."""
+    if name in ("screen", "notifications", "apps", "memory"):
         return False
+    if name == "open":
+        return bool(args.get("uri"))
     if name == "device":
         return args.get("action") == "set"
     if name == "clock":

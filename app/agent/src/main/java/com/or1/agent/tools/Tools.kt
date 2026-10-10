@@ -16,9 +16,14 @@ class Tools(context: Context) {
     private val memory = MemoryTool(context)
     private val calendar = CalendarTool(context)
 
-    /** Reads and navigation run freely; anything that changes state needs the user's OK. Same rules as proto. */
+    /**
+     * Reads and navigation run freely; anything that changes state needs the user's OK. Same rules as proto.
+     * `open` with a URI is gated too: a URI can carry data out (https://…?q=<notes>) if untrusted text steers the
+     * agent, and some act on their own; opening an app or a settings page can't. See also AgentHub.mustApprove.
+     */
     fun needsApproval(name: String, args: JSONObject): Boolean = when (name) {
-        "screen", "notifications", "apps", "memory", "open" -> false
+        "screen", "notifications", "apps", "memory" -> false
+        "open" -> args.optString("uri").isNotBlank()
         "device" -> args.optString("action") == "set"
         "clock" -> args.optString("action") != "next_alarm"
         "calendar", "routines" -> args.optString("action") != "list"

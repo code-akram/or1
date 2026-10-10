@@ -17,9 +17,11 @@ the chat never leaves the screen.
 - Fonts: Inter and Source Serif 4 (OFL) in `res/font/`.
 
 ## Hidden work display (`tools/HiddenDisplay.kt`)
-A 720x1600 @ 320 dpi virtual display, flags PUBLIC | OWN_CONTENT_ONLY | TRUSTED | SUPPORTS_TOUCH |
+A 720x1600 @ 320 dpi virtual display, flags PUBLIC | SECURE | OWN_CONTENT_ONLY | TRUSTED | SUPPORTS_TOUCH |
 DESTROY_CONTENT_ON_REMOVAL | TOUCH_FEEDBACK_DISABLED | OWN_DISPLAY_GROUP | ALWAYS_UNLOCKED. The hidden
-flags need signature permissions, which the platform key grants (see the manifest).
+flags need signature permissions, which the platform key grants (see the manifest). SECURE
+(CAPTURE_SECURE_VIDEO_OUTPUT) lets FLAG_SECURE windows render there, so password and banking screens show in the
+thumbnail, viewer and screenshots instead of black (and screenshots of them go to the API when the agent asks).
 - `open` and `clock` launch there (`ActivityOptions.setLaunchDisplayId`); an app that opens on the real
   screen is moved over (`IActivityTaskManager.moveRootTaskToDisplay`), else it runs on the real screen for the
   session. A leak guard moves stray windows that appear on the real screen right after an agent action.
@@ -110,6 +112,8 @@ scripts/provision.sh                  # install, API key, accessibility, notific
 ```
 
 `provision.sh` uses the Mac's ADB server tunnelled to port 5038 and is pinned to `RAV1022V1000265`.
+After an update `PackageReplacedReceiver` brings the chat back to the front; otherwise launcher3's Recents (kept on
+TrebleDroid for Recents, so it isn't disabled) would sit there until the next request.
 The API key goes over stdin from `~/.config/or1/anthropic-api-key` and is relabelled for the platform
 app's SELinux level (files written by `run-as` aren't readable by platform apps).
 
@@ -143,8 +147,26 @@ Commands with `content query` always run as the platform app: SELinux stops prov
 cursor to su's domain (`avc: denied { transfer } … tcontext=u:r:phhsu_daemon`), so those queries die with
 DeadObjectException as root, while inserts still work.
 
+## Approvals and untrusted content
+Reads and navigation run freely; changes ask first (`Tools.needsApproval`, same rules as `proto`). Text from the
+screen, notifications, apps and web pages can carry instructions, and a notification routine puts it in front of the
+model unasked, so the free calls were audited (2026-10-10) for what a planted instruction could do with them:
+- `open` with a URI asks first: a URI can carry data out (`https://…?q=<memory notes>`), and some act on their own.
+  Opening an app or a settings page stays free.
+- During a routine run, memory writes also ask (`AgentHooks.mustApprove`): a planted note would steer every later
+  chat. In the chat the user asked for the note, so it stays free there.
+- A routine's Always answers never include `shell`, and the chat's Always answers don't apply to routines.
+- Still free everywhere: reading the screen, notifications, apps, calendar, routines and device state; scrolling and
+  the back/home/recents/wake keys; opening an app or settings page. None of these can send data out or change
+  anything outside the agent's view.
+
+## Performance
+The RAVOZ's load average sits around 12 even when idle. That's 11 MediaTek kernel threads (hang_detect, ccci_poll1,
+display, battery gauge, charger, dvfs) that wait in uninterruptible sleep and count toward the load while using
+no CPU; the CPU is ~97% idle and ~1.4 GB of memory is available. In an eval run, 86% of the agent's time is API
+latency (median 1.3 s per call); on the phone, a screen read takes ~0.2 s and opening an app ~2.8 s.
+
 ## Known limits
-- FLAG_SECURE screens show black in the thumbnail, viewer and screenshots (the accessibility tree still works).
 - Wi-Fi sometimes doesn't rejoin a network while the screen is off (seen for 9+ minutes on 2026-10-10: scans ran but
   never connected; not reproducible on demand). Routines work around it by waking the screen; waking it reconnects
   within seconds.

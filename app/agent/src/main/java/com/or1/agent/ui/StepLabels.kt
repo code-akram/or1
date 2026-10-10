@@ -26,7 +26,8 @@ object StepLabels {
                 args.optString("package").isNotBlank() -> "Opened ${appName(args.getString("package"))}"
                 args.optString("settings_action").isNotBlank() ->
                     "Opened ${args.getString("settings_action").substringAfterLast('.').replace('_', ' ').lowercase()}"
-                else -> "Opened ${args.optString("uri").take(40)}"
+                // Imperative: it's asked for approval first.
+                else -> "Open ${args.optString("uri").take(60)}"
             }
             "device" -> if (action == "get") "Checked device status" else {
                 val setting = args.optString("setting")
@@ -59,8 +60,8 @@ object StepLabels {
             "apps" -> if (action == "list") "Listed apps" else "Looked up ${appName(args.optString("package"))}"
             "shell" -> "Run: ${args.optString("command").take(60)}"
             "memory" -> when (action) {
-                "add" -> "Saved a note"
-                "remove" -> "Removed a note"
+                "add" -> "Save a note: “${args.optString("text").take(60)}”"
+                "remove" -> "Remove note ${args.optInt("index")}"
                 else -> "Checked notes"
             }
             else -> tool

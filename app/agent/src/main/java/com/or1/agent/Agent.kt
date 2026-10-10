@@ -63,6 +63,8 @@ class UsageTally {
 /** Callbacks the UI layer implements: progress display and the approval gate. */
 interface AgentHooks {
     suspend fun approve(tool: String, args: JSONObject): Boolean
+    /** Calls the context makes riskier than [Tools.needsApproval] says (e.g. memory writes during a routine run). */
+    fun mustApprove(tool: String, args: JSONObject): Boolean = false
     fun thinking(text: String) {}
     fun text(text: String) {}
     fun toolCall(tool: String, args: JSONObject) {}
@@ -160,7 +162,7 @@ class Agent(
         val name = call.name()
         hooks.toolCall(name, args)
         val result = ToolResultBlockParam.builder().toolUseId(call.id())
-        if (tools.needsApproval(name, args) && !hooks.approve(name, args)) {
+        if ((tools.needsApproval(name, args) || hooks.mustApprove(name, args)) && !hooks.approve(name, args)) {
             val declined = "The user declined this action."
             hooks.toolResult(name, declined, false)
             transcript.log(JSONObject().put("tool", name).put("args", args).put("declined", true))

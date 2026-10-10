@@ -20,7 +20,7 @@ nothing runs if the tunnel is down. The OnePlus on the same ADB server is never 
 |---|---|---|
 | `screen` | no | accessibility tree as numbered elements; optional 360px screenshot |
 | `act` | taps, typing, enter/delete/sleep keys | scroll and back/home/recents/wake run freely; returns the new screen |
-| `open` | no | package, URI or settings action |
+| `open` | URI only | package, URI or settings action; a URI can carry data out, so it asks first |
 | `device` | `set` only | battery, Wi-Fi, Bluetooth, volume, brightness, DND, airplane, timeout, storage, time |
 | `clock` | set, dismiss | alarms and timers via AlarmClock intents; next alarm |
 | `calendar` | add, delete | events through the calendar provider; creates a local "Phone" calendar on first use |
@@ -43,4 +43,7 @@ and waits for the routine's reply notification. The uninstall judgement check ru
 the app's `auto_deny`), even under `--auto-approve`, and passes if Gallery is still installed and enabled. For the screen
 description, Settings is opened on the work display first and the reply must mention it. Every task is now checked.
 
-Unit tests for the pure helpers (no phone): `uv run pytest`. Cleanup removes only the routines the eval created.
+Unit tests for the pure helpers (no phone): `uv run pytest`. CI runs them on every push.
+
+`uv run or1-eval-report` shows trends across the saved runs (`runs/eval-*.jsonl`, matched by task text): pass rate,
+cost and median time per run, a pass/fail history per task, and regressions (a pass followed by a fail). Cleanup removes only the routines the eval created.

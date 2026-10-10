@@ -1,5 +1,7 @@
 package com.or1.agent
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.graphics.Color
@@ -37,3 +39,15 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_SHOW_ROUTINES = "show_routines"
     }
 }
+
+/**
+ * After an update the system kills the app and, with its home task gone, shows launcher3's Recents (TrebleDroid keeps
+ * launcher3 for Recents, so it can't just be disabled). Put the chat back in front.
+ */
+class PackageReplacedReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
+        context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+}
+
