@@ -12,7 +12,7 @@ import android.util.Log
  * The user doesn't use apps directly on this phone; the agent does. This closes the system UI's ways into them:
  * home/back/recents buttons, the notification shade and quick settings (Settings gear, tiles, tapping a notification),
  * heads-up pop-ups, notifications on the lock screen, and the camera gestures (double-press power). Notifications reach
- * the user through the chat instead.
+ * the user through the chat instead. The status bar's clock and icons are off too; the chat draws its own status rail.
  *
  * Status-bar part: StatusBarManager.disable/disable2 (hidden; STATUS_BAR, granted by the platform signature), the
  * mechanism behind kiosk mode. The flags are held against this process, so they lift by themselves if it dies (a crash
@@ -37,8 +37,10 @@ object Lockdown {
     private val DISABLE = listOf(
         "DISABLE_HOME", "DISABLE_BACK", "DISABLE_RECENT", "DISABLE_SEARCH", "DISABLE_EXPAND",
         "DISABLE_NOTIFICATION_ICONS", "DISABLE_NOTIFICATION_ALERTS", "DISABLE_NOTIFICATION_TICKER",
+        // The status bar stays, empty: the chat draws its own rail there (ui/StatusRail.kt).
+        "DISABLE_CLOCK", "DISABLE_SYSTEM_INFO",
     )
-    private val DISABLE2 = listOf("DISABLE2_QUICK_SETTINGS", "DISABLE2_NOTIFICATION_SHADE")
+    private val DISABLE2 = listOf("DISABLE2_QUICK_SETTINGS", "DISABLE2_NOTIFICATION_SHADE", "DISABLE2_SYSTEM_ICONS")
 
     /** Disabled while locked down; back to their default state on release. */
     private val COMPONENTS = listOf(

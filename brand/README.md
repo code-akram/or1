@@ -27,20 +27,37 @@ python3 brand/make_boot.py backup/20261009-202452/by-name/logo.bin   # -> brand/
 | Lock screen (wallpaper, clock) | Keyguard | gone | `locksettings set-disabled true` (`provision.sh`) |
 | Wallpaper (shown behind "Phone is starting…") | framework default | black | `DebugReceiver --es wallpaper black` (`provision.sh`) |
 | Shutdown | default | or1 | `out/shutdownanimation.zip` |
+| Off-mode charging | `logo` partition, images 1, 3–37, 39–59 | pixel battery | `out/logo.bin` (below) |
 
 The chat is pure black too (`Palette.Background`, and the window background so the first frame is black), with no
 splash icon.
 
+## Charging screens
+
+When the phone charges while off, LK draws the charging screen from the same `logo` partition: a background, a fill
+box (x 270–449, y 707–1024) that it fills with the level frames, the "wave" frames and the fill line, and the percentage
+above it from the digit tiles. `make_boot.py` redraws all of them in the wordmark's blocks (10 px): a pixel battery
+outline in dim grey on black, off-white fill, one accent (`#D97757`) block marching along the fill's top edge, and the
+percentage in the pixel digits. Low battery is the empty outline with one accent cell; full is the filled battery with
+"100%". `out/charging.png` is a contact sheet of all 60 images.
+
+## Status bar
+
+SystemUI draws no clock or icons (`Lockdown`: `DISABLE_CLOCK`, `DISABLE_SYSTEM_INFO`, `DISABLE2_SYSTEM_ICONS`); the
+app draws its own rail in that space (`StatusRail.kt`), in the same pixel font:
+`or1 ··· ──── 21:14 ──── ▂▃▄▅ ── 87 ▮▮▮▮▮▮▮▮▮▯ +`. The three blocks after the wordmark march in the accent colour
+while the agent works; Wi-Fi shows `x` when not connected; the battery number and cells turn accent at 15% or below.
+
 ## Logo partition (needs the Mac)
 
 `logo` is an MTK logo image: a 512-byte header, then 60 zlib-compressed 720x1600 BGRA images (boot logo, kernel logo,
-the charging screens). `make_boot.py` replaces only the three RAVOZ ones and keeps the partition's size. The eMMC
+the charging screens). `make_boot.py` redraws all 60, at their stock sizes, and keeps the partition's size. The eMMC
 write-protects `logo` while Android runs ("write protection violation", like `boot_a`), so it can only be flashed from
 LK's fastboot, on the Mac:
 
 ```sh
 scp archlinux:code/or1/brand/out/logo.bin ~/or1-logo.bin
-shasum -a 256 ~/or1-logo.bin          # 35a686310e4eb77b... (sha256sum brand/out/logo.bin here)
+shasum -a 256 ~/or1-logo.bin          # e9fc34dbe02ac574... (sha256sum brand/out/logo.bin here)
 adb -s RAV1022V1000265 reboot bootloader
 fastboot devices -l                   # note the RAVOZ's fastboot serial; never run fastboot without -s
 fastboot -s <serial> flash logo ~/or1-logo.bin
