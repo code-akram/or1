@@ -15,6 +15,7 @@ class Tools(context: Context) {
     private val shell = ShellTool()
     private val memory = MemoryTool(context)
     private val calendar = CalendarTool(context)
+    private val contacts = ContactsTool(context)
 
     /**
      * Reads and navigation run freely; anything that changes state needs the user's OK. Same rules as proto.
@@ -27,6 +28,7 @@ class Tools(context: Context) {
         "device" -> args.optString("action") == "set"
         "clock" -> args.optString("action") != "next_alarm"
         "calendar", "routines" -> args.optString("action") != "list"
+        "contacts" -> args.optString("action") != "find"
         "act" -> {
             val action = args.optString("action")
             !(action == "scroll" || (action == "key" && args.optString("key") in NAVIGATION_KEYS))
@@ -56,6 +58,7 @@ class Tools(context: Context) {
         "shell" -> ToolOutput(shell.run(args.getString("command")))
         "memory" -> ToolOutput(memory.run(args))
         "calendar" -> ToolOutput(calendar.run(args))
+        "contacts" -> ToolOutput(contacts.run(args))
         "routines" -> ToolOutput(com.or1.agent.Routines.tool(args))
         else -> throw IllegalArgumentException("Unknown tool '$name'.")
     }

@@ -3,12 +3,16 @@ package com.or1.agent
 import android.content.Context
 import com.anthropic.client.AnthropicClient
 import com.anthropic.core.JsonValue
+import com.anthropic.helpers.MessageAccumulator
 import com.anthropic.models.messages.Base64ImageSource
+import com.anthropic.models.messages.CacheControlEphemeral
 import com.anthropic.models.messages.ContentBlockParam
 import com.anthropic.models.messages.MessageCreateParams
 import com.anthropic.models.messages.MessageParam
 import com.anthropic.models.messages.OutputConfig
+import com.anthropic.models.messages.Message
 import com.anthropic.models.messages.StopReason
+import com.anthropic.models.messages.TextBlockParam
 import com.anthropic.models.messages.ThinkingConfigAdaptive
 import com.anthropic.models.messages.Tool
 import com.anthropic.models.messages.ToolResultBlockParam
@@ -16,6 +20,7 @@ import com.anthropic.models.messages.ToolUseBlock
 import com.or1.agent.tools.Tools
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -66,6 +71,8 @@ interface AgentHooks {
     /** Calls the context makes riskier than [Tools.needsApproval] says (e.g. memory writes during a routine run). */
     fun mustApprove(tool: String, args: JSONObject): Boolean = false
     fun thinking(text: String) {}
+    /** The text of the response being streamed so far (replaced, not appended, on each call). */
+    fun partial(text: String) {}
     fun text(text: String) {}
     fun toolCall(tool: String, args: JSONObject) {}
     fun toolResult(tool: String, summary: String, isError: Boolean) {}
@@ -85,8 +92,11 @@ class Agent(
 
     suspend fun send(text: String): String {
         val start = messages.size
-        messages += MessageParam.builder().role(MessageParam.Role.USER).content(text).build()
-        transcript.log(JSONObject().put("user", text))
+        // The local time rides on each message (not the system prompt, which must stay byte-stable for the cache), so
+        // date-relative requests don't spend a call on `device get`.
+        val now = java.text.SimpleDateFormat("EEE dd MMM yyyy HH:mm zzz", java.util.Locale.US).format(java.util.Date())
+        messages += MessageParam.builder().role(MessageParam.Role.USER).content("[Now: $now] $text").build()
+        transcript.log(JSONObject().put("user", text).put("now", now))
         try {
             return loop(start)
         } catch (e: CancellationException) {
@@ -108,19 +118,22 @@ class Agent(
     }
 
     private suspend fun loop(start: Int): String {
-        // No cache_control: this account applies automatic 1-hour caching server-side, and adding our own
-        // breakpoints conflicts with it (TTL mismatch, then the 4-breakpoint limit).
+        // Prompt caching, 1-hour TTL: an explicit breakpoint after the static tools + system prompt, plus top-level
+        // automatic caching for the growing conversation. Both 1h: a 1-hour entry can't follow a 5-minute one.
+        // Calls within one request are seconds apart, but the next chat message or routine run often comes 5-60 min later.
+        val oneHour = CacheControlEphemeral.builder().ttl(CacheControlEphemeral.Ttl.TTL_1H).build()
         repeat(MAX_STEPS) {
             val params = MessageCreateParams.builder()
                 .model(config.model)
                 .maxTokens(16000L)
-                .system(config.system)
+                .systemOfTextBlockParams(listOf(TextBlockParam.builder().text(config.system).cacheControl(oneHour).build()))
+                .cacheControl(oneHour)
                 .tools(config.tools.map { com.anthropic.models.messages.ToolUnion.ofTool(it) })
                 .messages(messages.toList())
                 .thinking(ThinkingConfigAdaptive.builder().display(ThinkingConfigAdaptive.Display.SUMMARIZED).build())
                 .outputConfig(OutputConfig.builder().effort(effort(config.effort)).build())
                 .build()
-            val response = withContext(Dispatchers.IO) { client.messages().create(params) }
+            val response = stream(params)
             val cost = usage.add(config.model, response.usage())
             transcript.log(
                 JSONObject()
@@ -155,6 +168,28 @@ class Agent(
             openCalls = emptyList()
         }
         return "[Stopped after $MAX_STEPS steps without finishing.]"
+    }
+
+    /**
+     * One request, streamed: text is passed to [AgentHooks.partial] as it arrives, and the events are folded into the
+     * same [Message] a non-streaming call returns. Stop is checked on every event (a blocking call couldn't be stopped).
+     */
+    private suspend fun stream(params: MessageCreateParams): Message = withContext(Dispatchers.IO) {
+        val accumulator = MessageAccumulator.create()
+        val text = StringBuilder()
+        client.messages().createStreaming(params).use { response ->
+            for (event in response.stream().iterator()) {
+                coroutineContext.ensureActive()
+                accumulator.accumulate(event)
+                event.contentBlockStart().ifPresent { start ->
+                    if (start.contentBlock().isText() && text.isNotEmpty()) text.append('\n')
+                }
+                event.contentBlockDelta().ifPresent { delta ->
+                    delta.delta().text().ifPresent { hooks.partial(text.append(it.text()).toString()) }
+                }
+            }
+        }
+        accumulator.message()
     }
 
     private suspend fun runTool(call: ToolUseBlock): ToolResultBlockParam {

@@ -152,6 +152,26 @@ TOOLS = [
         },
     },
     {
+        "name": "contacts",
+        "description": (
+            "Contacts on the phone, without the UI. find: contacts whose name, number or email contains `query` "
+            "(case-insensitive), with their numbers and emails. add: a new contact with `name` and optional `phone` "
+            "and `email`, saved on the phone (no account)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["find", "add"]},
+                "query": {"type": "string"},
+                "name": {"type": "string"},
+                "phone": {"type": "string"},
+                "email": {"type": "string"},
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "notifications",
         "description": "List current notifications (app package, title, text, posted time).",
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
@@ -218,6 +238,8 @@ def needs_approval(name: str, args: dict) -> bool:
         return args.get("action") != "next_alarm"
     if name in ("calendar", "routines"):
         return args.get("action") != "list"
+    if name == "contacts":
+        return args.get("action") != "find"
     if name == "act":
         action = args.get("action")
         return not (action == "scroll" or (action == "key" and args.get("key") in NAVIGATION_KEYS))
@@ -486,6 +508,37 @@ def _calendar(args: dict) -> str:
     raise ValueError(f"Unknown action {action!r}.")
 
 
+CONTACTS = "content://com.android.contacts"
+NAME_TYPE, PHONE_TYPE, EMAIL_TYPE = ("vnd.android.cursor.item/name", "vnd.android.cursor.item/phone_v2",
+                                     "vnd.android.cursor.item/email_v2")
+
+
+def _contacts(args: dict) -> str:
+    if args["action"] == "find":
+        q = (args.get("query") or "").replace("'", "''").lower()
+        rows = _calendar_rows(adb.shell(
+            f"content query --uri {CONTACTS}/data --projection contact_id:display_name:mimetype:data1 "
+            f"--where \"mimetype IN ('{PHONE_TYPE}','{EMAIL_TYPE}','{NAME_TYPE}')\""))
+        people: dict[str, dict] = {}
+        for r in rows:
+            person = people.setdefault(r["contact_id"], {"name": r.get("display_name") or "", "details": []})
+            if r["mimetype"] != NAME_TYPE and r.get("data1"):
+                person["details"].append(r["data1"])
+        found = [p for p in people.values() if q in p["name"].lower() or any(q in d.lower() for d in p["details"])]
+        return "\n".join(f"- {p['name']}: {', '.join(p['details']) or 'no number or email'}" for p in found) or \
+            f"No contact matches '{args.get('query', '')}'."
+    name = args.get("name")
+    if not name:
+        raise ValueError("add needs `name`.")
+    adb.shell(f"content insert --uri {CONTACTS}/raw_contacts --bind starred:i:0")
+    raw_id = _calendar_rows(adb.shell(f"content query --uri {CONTACTS}/raw_contacts --projection _id --sort '_id DESC'"))[0]["_id"]
+    rows = [(NAME_TYPE, name, None)] + [(t, args[k], v) for k, t, v in (("phone", PHONE_TYPE, 2), ("email", EMAIL_TYPE, 3)) if args.get(k)]
+    for mimetype, value, kind in rows:
+        adb.shell(f"content insert --uri {CONTACTS}/data --bind raw_contact_id:i:{raw_id} --bind mimetype:s:{mimetype} "
+                  f"--bind data1:s:{shlex.quote(value)}" + (f" --bind data2:i:{kind}" if kind else ""))
+    return f"Added {name}" + "".join(f", {args[k]}" for k in ("phone", "email") if args.get(k)) + "."
+
+
 def _notifications() -> str:
     out = adb.shell("dumpsys notification --noredact")
     items, cur = [], None
@@ -576,6 +629,8 @@ def execute(name: str, args: dict) -> str | list:
         return _clock(args)
     if name == "calendar":
         return _calendar(args)
+    if name == "contacts":
+        return _contacts(args)
     if name == "notifications":
         return _notifications()
     if name == "apps":

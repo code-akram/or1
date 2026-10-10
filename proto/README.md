@@ -14,7 +14,7 @@ uv run or1-eval                       # task list in evals/tasks.txt; --only 1,3
 The SSH tunnel from the Mac (port 5038) must be up. Every adb call is pinned to `RAV1022V1000265`;
 nothing runs if the tunnel is down. The OnePlus on the same ADB server is never addressed.
 
-## Tools (10, plus `routines` on the phone)
+## Tools (11, plus `routines` on the phone)
 
 | Tool | Approval | Notes |
 |---|---|---|
@@ -23,6 +23,7 @@ nothing runs if the tunnel is down. The OnePlus on the same ADB server is never 
 | `open` | URI only | package, URI or settings action; a URI can carry data out, so it asks first |
 | `device` | `set` only | battery, Wi-Fi, Bluetooth, volume, brightness, DND, airplane, timeout, storage, time |
 | `clock` | set, dismiss | alarms and timers via AlarmClock intents; next alarm |
+| `contacts` | add | find (name, number or email) and add, through the contacts provider |
 | `calendar` | add, delete | events through the calendar provider; creates a local "Phone" calendar on first use |
 | `notifications` | no | list only |
 | `apps` | no | list launchable apps, package info |

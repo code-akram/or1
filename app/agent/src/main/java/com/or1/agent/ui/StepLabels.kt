@@ -51,6 +51,11 @@ object StepLabels {
                 "delete" -> "Delete calendar event ${args.optLong("event_id")}"
                 else -> "Checked the calendar"
             }
+            "contacts" -> if (action == "add") {
+                "Add contact ${args.optString("name").take(40)}" + listOf("phone", "email").mapNotNull { k ->
+                    args.optString(k).takeIf { it.isNotBlank() }
+                }.joinToString("") { ", $it" }
+            } else "Looked up “${args.optString("query").take(40)}” in contacts"
             "routines" -> when (action) {
                 "add" -> "Create a routine: ${routineTrigger(args)}, “${args.optString("prompt").take(60)}”"
                 "remove" -> "Remove routine ${args.optString("id")}"

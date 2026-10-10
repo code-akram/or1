@@ -61,6 +61,7 @@ data class Turn(
     val approvals: List<ChatItem.Approval>,
     val infos: List<ChatItem.Info>,
     val reply: ChatItem.Reply?,
+    val draft: ChatItem.Draft? = null,
 ) {
     val key: Long get() = user?.id ?: steps.firstOrNull()?.id ?: reply?.id ?: infos.firstOrNull()?.id ?: 0L
     val toolCalls get() = steps.filterIsInstance<ChatItem.ToolCall>()
@@ -75,17 +76,19 @@ fun groupTurns(items: List<ChatItem>): List<Turn> {
     val approvals = mutableListOf<ChatItem.Approval>()
     val infos = mutableListOf<ChatItem.Info>()
     var reply: ChatItem.Reply? = null
+    var draft: ChatItem.Draft? = null
     fun flush() {
-        if (user != null || steps.isNotEmpty() || approvals.isNotEmpty() || infos.isNotEmpty() || reply != null) {
-            turns += Turn(user, steps.toList(), approvals.toList(), infos.toList(), reply)
+        if (user != null || steps.isNotEmpty() || approvals.isNotEmpty() || infos.isNotEmpty() || reply != null || draft != null) {
+            turns += Turn(user, steps.toList(), approvals.toList(), infos.toList(), reply, draft)
         }
-        user = null; steps.clear(); approvals.clear(); infos.clear(); reply = null
+        user = null; steps.clear(); approvals.clear(); infos.clear(); reply = null; draft = null
     }
     for (item in items) when (item) {
         is ChatItem.User -> { flush(); user = item }
         is ChatItem.Thinking, is ChatItem.ToolCall -> steps += item
         is ChatItem.Approval -> approvals += item
         is ChatItem.Info -> infos += item
+        is ChatItem.Draft -> draft = item
         is ChatItem.Reply -> { reply = item; flush() }
     }
     flush()

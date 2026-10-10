@@ -39,6 +39,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -72,6 +73,7 @@ fun ChatScreen() {
     Or1Theme {
         val context = LocalContext.current
         val items by AgentHub.items.collectAsState()
+        val conversation by AgentHub.conversation.collectAsState()
         val busy by AgentHub.busy.collectAsState()
         val totalCost by AgentHub.totalCost.collectAsState()
         val effort by AgentHub.effort.collectAsState()
@@ -160,7 +162,9 @@ fun ChatScreen() {
                         if (items.isEmpty()) {
                             EmptyState(suggestions, onSuggestion = { send(it.prompt) })
                         } else {
-                            Conversation(items, busy, preview, onOpenPreview = { viewerOpen = true })
+                            // A list per conversation: the old turns' exit animations otherwise get stuck when the
+                            // items are replaced in one go (a fresh conversation), leaving them drawn under the new one.
+                            key(conversation) { Conversation(items, busy, preview, onOpenPreview = { viewerOpen = true }) }
                         }
                     }
                     Composer(
@@ -283,7 +287,7 @@ fun TurnView(turn: Turn, active: Boolean, preview: android.graphics.Bitmap?, onO
         }
         for (approval in turn.approvals) ApprovalCard(approval) { AgentHub.decide(approval, it) }
         for (info in turn.infos) InfoLine(info)
-        turn.reply?.let { ReplyBlock(it) }
+        turn.reply?.let { ReplyBlock(it) } ?: turn.draft?.let { ReplyBlock(ChatItem.Reply(it.id, it.text, 0.0, 0.0)) }
     }
 }
 

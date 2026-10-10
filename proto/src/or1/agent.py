@@ -8,7 +8,7 @@ from typing import Callable
 
 import anthropic
 
-from . import tools
+from . import adb, tools
 from .prompt import SYSTEM
 
 MAX_STEPS = 30
@@ -91,8 +91,11 @@ class Agent:
     def send(self, text: str) -> str:
         """Handle one user message to completion and return the final reply text."""
         start = len(self.messages)
-        self.messages.append({"role": "user", "content": text})
-        self._log({"t": time.time(), "user": text})
+        # The phone's local time rides on each message (not the system prompt, which must stay byte-stable for the
+        # cache), so date-relative requests don't spend a call on `device get`.
+        now = adb.shell("date '+%a %d %b %Y %H:%M %Z'").strip()
+        self.messages.append({"role": "user", "content": f"[Now: {now}] {text}"})
+        self._log({"t": time.time(), "user": text, "now": now})
         try:
             return self._loop(start)
         except KeyboardInterrupt:
@@ -100,13 +103,16 @@ class Agent:
             raise
 
     def _loop(self, start: int) -> str:
-        # No cache_control here: this account applies automatic 1-hour caching server-side, and adding
-        # our own breakpoints conflicts with it (TTL mismatch, then the 4-breakpoint limit).
         for _ in range(MAX_STEPS):
+            # Prompt caching, 1-hour TTL: an explicit breakpoint after the static tools + system prompt, plus
+            # top-level automatic caching for the growing conversation. Both 1h: a 1-hour entry can't follow a
+            # 5-minute one. Requests in a session are minutes apart at most, but a conversation picked up later
+            # within the hour still hits.
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=16000,
-                system=SYSTEM,
+                system=[{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+                cache_control={"type": "ephemeral", "ttl": "1h"},
                 tools=self._tools(),
                 messages=self.messages,
                 thinking={"type": "adaptive", "display": "summarized"},

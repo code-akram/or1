@@ -23,6 +23,7 @@ class NotifListener : NotificationListenerService() {
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
         _changes.value++
+        sbn?.let { Routines.forget(it) }
     }
 
     companion object {

@@ -42,6 +42,8 @@ sealed interface ChatItem {
         val decision: CompletableDeferred<Decision>, val state: Decision? = null, val forRoutine: Boolean = false,
     ) : ChatItem
     data class Info(override val id: Long, val text: String) : ChatItem
+    /** The reply as it streams in; replaced by the [Reply] when it's complete, dropped if the model calls a tool. */
+    data class Draft(override val id: Long, val text: String) : ChatItem
 }
 
 enum class Decision { ALLOW, DENY, ALWAYS }
@@ -66,6 +68,9 @@ object AgentHub {
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy
     /** Routine runs have their own thread (the Routines screen), so they don't interleave with the chat. */
+    private val _conversation = MutableStateFlow(0)
+    /** Bumped on every new conversation, so the chat starts a fresh list instead of animating the old items away. */
+    val conversation: StateFlow<Int> = _conversation
     private val _routineItems = MutableStateFlow<List<ChatItem>>(emptyList())
     val routineItems: StateFlow<List<ChatItem>> = _routineItems
     private val _routineBusy = MutableStateFlow(false)
@@ -100,6 +105,9 @@ object AgentHub {
     /** The routine being run, if this request came from one (its approvals are scoped to it). */
     @Volatile
     private var routine: Routine? = null
+    /** The [ChatItem.Draft] the current response is streaming into, if any. */
+    @Volatile
+    private var draftId: Long? = null
     /** Set when the user takes over the hidden app, so the chat doesn't jump back in front of it. */
     @Volatile
     private var suppressReturn = false
@@ -288,6 +296,7 @@ object AgentHub {
             "[Error: ${e.message ?: e.javaClass.simpleName}]"
         }
         val seconds = (System.currentTimeMillis() - started) / 1000.0
+        clearDraft()
         add(ChatItem.Reply(ids.incrementAndGet(), reply, cost, seconds))
         busy.value = false
         return Outcome(reply, cost, requests, seconds, failed)
@@ -312,6 +321,7 @@ object AgentHub {
     fun newConversation() {
         agent?.reset()
         _items.value = emptyList()
+        _conversation.value++
         alwaysAllowed.clear()
     }
 
@@ -384,8 +394,20 @@ object AgentHub {
 
         override fun thinking(text: String) = add(ChatItem.Thinking(ids.incrementAndGet(), text.trim()))
 
-        override fun toolCall(tool: String, args: JSONObject) =
+        override fun partial(text: String) {
+            val id = draftId
+            if (id == null) {
+                draftId = ids.incrementAndGet().also { add(ChatItem.Draft(it, text)) }
+            } else {
+                replace(id) { ChatItem.Draft(id, text) }
+            }
+        }
+
+        override fun toolCall(tool: String, args: JSONObject) {
+            // Text streamed before a tool call is a preamble ("Let me check"), not the reply.
+            clearDraft()
             add(ChatItem.ToolCall(ids.incrementAndGet(), label(tool, args), tools.describe(tool, args)))
+        }
 
         override fun toolResult(tool: String, summary: String, isError: Boolean) {
             val pending = thread.value.lastOrNull { it is ChatItem.ToolCall && it.result == null } ?: return
@@ -394,6 +416,12 @@ object AgentHub {
     }
 
     private fun label(tool: String, args: JSONObject) = StepLabels.label(tool, args, tools::elementLabel)
+
+    private fun clearDraft() {
+        val id = draftId ?: return
+        draftId = null
+        thread.update { list -> list.filterNot { it.id == id } }
+    }
 
     /** The thread the current request writes to: the routines thread while a routine runs, else the chat. */
     private val thread get() = if (routine != null) _routineItems else _items

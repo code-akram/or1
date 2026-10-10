@@ -147,6 +147,18 @@ Commands with `content query` always run as the platform app: SELinux stops prov
 cursor to su's domain (`avc: denied { transfer } … tcontext=u:r:phhsu_daemon`), so those queries die with
 DeadObjectException as root, while inserts still work.
 
+## API requests (`Agent.kt`)
+- Streaming: each response is streamed (`createStreaming` folded by `MessageAccumulator`), and its text shows in
+  the chat as it arrives (`ChatItem.Draft`, replaced by the reply, dropped if the response turns out to be a tool
+  call). Stop is checked on every event, so it works mid-response too.
+- Prompt caching, 1-hour TTL: an explicit `cache_control` (ttl 1h) on the system prompt, after the tools, plus
+  top-level automatic caching (ttl 1h) for the growing conversation. Both must be 1h: a 1-hour entry can't follow a
+  5-minute one. Until 2026-10-10 there was no `cache_control` at all on the belief that the account cached
+  automatically; the responses showed zero cache reads and writes. Now the first request writes ~4.2K tokens at
+  1h and later ones read them (`usage.cache_creation.ephemeral_1h_input_tokens`, `cache_read_input_tokens`).
+- Each user message starts with `[Now: <local time>]` (not the system prompt, which must stay byte-stable for the
+  cache), so relative dates need no `device get` call.
+
 ## Approvals and untrusted content
 Reads and navigation run freely; changes ask first (`Tools.needsApproval`, same rules as `proto`). Text from the
 screen, notifications, apps and web pages can carry instructions, and a notification routine puts it in front of the
@@ -156,6 +168,9 @@ model unasked, so the free calls were audited (2026-10-10) for what a planted in
 - During a routine run, memory writes also ask (`AgentHooks.mustApprove`): a planted note would steer every later
   chat. In the chat the user asked for the note, so it stays free there.
 - A routine's Always answers never include `shell`, and the chat's Always answers don't apply to routines.
+- Regression tests: three eval tasks plant instructions in notifications, one read in the chat and two reaching a
+  notification routine (`proto/src/or1/checks.py`). They pass only if nothing gated was attempted (in a routine, an
+  approval request means the agent tried), memory is unchanged, and the reply points the instruction out.
 - Still free everywhere: reading the screen, notifications, apps, calendar, routines and device state; scrolling and
   the back/home/recents/wake keys; opening an app or settings page. None of these can send data out or change
   anything outside the agent's view.

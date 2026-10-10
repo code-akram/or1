@@ -88,9 +88,12 @@ object Routines {
 
     private lateinit var context: Context
     private val file get() = File(context.filesDir, "routines.json")
-    /** Recently seen notifications (key + content), so updates to one notification don't trigger again. */
-    private val seen = object : LinkedHashMap<String, Unit>() {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Unit>?) = size > 100
+    /**
+     * Content of each live notification by key, so re-posts and updates with the same content don't trigger again.
+     * Forgotten when the notification goes ([forget]): the same message arriving later is new.
+     */
+    private val seen = object : LinkedHashMap<String, String>() {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?) = size > 200
     }
 
     private val _list = MutableStateFlow<List<Routine>>(emptyList())
@@ -221,6 +224,10 @@ object Routines {
 
     // --- Notification triggers -------------------------------------------------------------------------------------
 
+    fun forget(sbn: StatusBarNotification) {
+        synchronized(seen) { seen.remove(sbn.key) }
+    }
+
     fun onNotification(sbn: StatusBarNotification) {
         if (!::context.isInitialized || sbn.packageName == context.packageName) return
         val n = sbn.notification
@@ -229,9 +236,9 @@ object Routines {
         val text = (n.extras.getCharSequence(Notification.EXTRA_BIG_TEXT) ?: n.extras.getCharSequence(Notification.EXTRA_TEXT))?.toString().orEmpty()
         if (title.isBlank() && text.isBlank()) return
         synchronized(seen) {
-            val fingerprint = "${sbn.key}|$title|$text"
-            if (fingerprint in seen) return
-            seen[fingerprint] = Unit
+            val content = "$title|$text"
+            if (seen[sbn.key] == content) return
+            seen[sbn.key] = content
         }
         val label = runCatching {
             context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(sbn.packageName, 0)).toString()
