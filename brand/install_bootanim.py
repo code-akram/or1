@@ -4,15 +4,17 @@
 The running system can't be written: its ext4 has shared_blocks (never mountable read-write) and its dm device is
 read-only, and `adb remount`'s overlay doesn't mount at boot on this GSI (mounted late, it hides phh's su). So:
   1. copy the flashed TrebleDroid image and add both zips with debugfs (root:root 0644, system_file label);
-  2. diff it against the original: a handful of 4K blocks (superblock, descriptors, bitmaps, inodes, dir, data);
-  3. map each block through system_a's live dm table onto super (mmcblk0p40);
-  4. on the phone, patch_blocks.sh checks every target still holds the original bytes, then writes and re-reads.
-The phone's system_a must be bit-identical to the image (it is unless something wrote to it); step 4 refuses
-otherwise. A reboot picks the files up. Needs adb root and debugfs/e2fsck (e2fsprogs) on this host.
+  2. find what the phone's system_a holds now: the stock image, plus whatever an earlier run patched (it hashes
+     system_a per MiB on the phone and pulls the MiBs that differ from the image, about two minutes);
+  3. diff that against the new image: a handful of 4K blocks (superblock, descriptors, bitmaps, inodes, dir, data);
+  4. map each block through system_a's live dm table onto super (mmcblk0p40);
+  5. on the phone, patch_blocks.sh checks every target still holds the bytes read in step 2, then writes and re-reads.
+Afterwards system_a is bit-identical to the new image (read through super: until a reboot, reading system_a itself
+returns blocks 0 and 1 as the mounted ext4 holds them, the old ones). A reboot picks the files up. Needs adb root and
+debugfs/e2fsck (e2fsprogs) on this host.
 
 Usage: python3 brand/install_bootanim.py downloads/td-ci-20230905/system-td-arm64-ab-vanilla.img [--write]
-Without --write it stops after the on-phone check. Exits early when the phone already has both zips as built; on a
-phone patched from another build it refuses at block 0 (debugfs stamps the superblock with the current time).
+Without --write it stops after the on-phone check. Exits early when the phone already has both zips as built.
 """
 import hashlib
 import re
@@ -27,6 +29,8 @@ OUT = HERE / "out"
 WORK = OUT / "sys"
 PHONE_DIR = "/data/local/tmp/or1-patch"
 BLOCK = 4096
+CHUNK = 1 << 20
+SYSTEM = "/dev/block/mapper/system_a"
 LABEL = b"u:object_r:system_file:s0\0"
 
 
@@ -61,7 +65,26 @@ def dm_extents() -> list[tuple[int, int, int]]:
     return extents
 
 
-def build_patch(stock: Path, image: Path) -> None:
+def phone_chunks(stock: Path) -> dict[int, bytes]:
+    """The MiBs of the phone's system_a that differ from the stock image, read after a cache drop."""
+    count = -(-stock.stat().st_size // CHUNK)
+    script = (f"echo 3 > /proc/sys/vm/drop_caches; i=0; while [ $i -lt {count} ]; do "
+              f"dd if={SYSTEM} bs={CHUNK} skip=$i count=1 2>/dev/null | sha256sum; i=$((i+1)); done")
+    on_phone = [line.split()[0] for line in adb("shell", script).splitlines()]
+    assert len(on_phone) == count, f"{len(on_phone)} of {count} hashes"
+    differ = {}
+    with open(stock, "rb") as f:
+        for i, digest in enumerate(on_phone):
+            data = f.read(CHUNK)
+            if hashlib.sha256(data).hexdigest() != digest:
+                differ[i] = subprocess.run(ADB + ["exec-out", f"dd if={SYSTEM} bs={CHUNK} skip={i} count=1 2>/dev/null"],
+                                           check=True, capture_output=True).stdout[:len(data)]
+                assert hashlib.sha256(differ[i]).hexdigest() == digest, f"MiB {i} changed while reading"
+    print(f"system_a differs from the stock image in {len(differ)} MiB")
+    return differ
+
+
+def build_patch(stock: Path, phone: dict[int, bytes], image: Path) -> None:
     extents = dm_extents()
     for old in WORK.glob("blk_*.new"):
         old.unlink()
@@ -70,6 +93,9 @@ def build_patch(stock: Path, image: Path) -> None:
         block = 0
         while chunk_a := a.read(BLOCK):
             chunk_b = b.read(BLOCK)
+            if (i := block * BLOCK // CHUNK) in phone:
+                offset = block * BLOCK % CHUNK
+                chunk_a = phone[i][offset:offset + BLOCK]
             if chunk_a != chunk_b:
                 sector = block * BLOCK // 512
                 [(start, _, dev)] = [e for e in extents if e[0] <= sector < e[1]]
@@ -93,7 +119,7 @@ def main() -> None:
     image = build_image(stock)
     adb("root")
     subprocess.run(ADB + ["wait-for-device"], check=True)
-    build_patch(stock, image)
+    build_patch(stock, phone_chunks(stock), image)
     adb("shell", f"rm -rf {PHONE_DIR}; mkdir -p {PHONE_DIR}")
     files = [HERE / "patch_blocks.sh", WORK / "patch.txt", *sorted(WORK.glob("blk_*.new"))]
     adb("push", *map(str, files), PHONE_DIR)

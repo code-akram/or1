@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -44,7 +43,7 @@ import kotlinx.coroutines.delay
  * The status bar, redrawn: SystemUI draws nothing there (clock and icons are off, see Lockdown), and this rail sits just
  * below it, clear of the camera notch, taking [RAIL_HEIGHT] from the screens under it. Pixel-block modules on a thin
  * rail, in the boot wordmark's style (brand/make_boot.py has the same glyphs):
- * or1 (blocks march while the agent works) · time · Wi-Fi bars · battery level.
+ * or1 on the left (blocks march while the agent works), a rail, then time, battery level and Wi-Fi bars on the right.
  */
 @Composable
 fun StatusRail(busy: Boolean, modifier: Modifier = Modifier) {
@@ -67,11 +66,9 @@ fun StatusRail(busy: Boolean, modifier: Modifier = Modifier) {
             Module { Wordmark(); Marching(busy) }
             Rail()
             Module { Glyphs(state.time, Palette.Text) }
-            Rail()
-            Module { WifiBars(state.wifiLevel) }
-            Rail(Modifier.width(10.dp))
             // The battery is just its number: bright while charging, grey otherwise.
             Module { Glyphs(if (state.battery >= 0) "${state.battery}" else "--", if (state.charging) Palette.Text else Palette.TextDim) }
+            Module { WifiBars(state.wifiLevel) }
         }
     }
 }
@@ -195,13 +192,15 @@ private fun DrawScope.block(col: Int, row: Int, b: Float, color: Color) =
 object PixelFont {
     const val HEIGHT = 5
 
-    /** The wordmark, as on the boot screens: o and r at x-height (4 rows), the 1 twice that, on the same bottom line. */
+    /** The wordmark, as on the boot screens: o and r as tall as the digits (5 rows), the 1 twice that, on the same bottom line. */
     val WORDMARK = listOf(
         "         #",
         "        ##",
         "         #",
         "         #",
+        "         #",
         "### ###  #",
+        "# # #    #",
         "# # #    #",
         "# # #    #",
         "### #    #",

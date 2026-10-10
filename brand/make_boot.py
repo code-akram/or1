@@ -23,10 +23,16 @@ DIM = (0x39, 0x38, 0x35)  # the rail colour (Palette.Border)
 ACCENT = (0xD9, 0x77, 0x57)  # terracotta (Palette.Accent): low battery only
 PAPER = (0, 0, 0)
 
-# The wordmark, one character per block: o, r and 1, all at x-height.
+# The wordmark, one character per block: o and r as tall as the digits (5 rows), the 1 twice that, on one bottom line.
 WORDMARK = [
+    "         #",
+    "        ##",
+    "         #",
+    "         #",
+    "         #",
     "### ###  #",
-    "# # #   ##",
+    "# # #    #",
+    "# # #    #",
     "# # #    #",
     "### #    #",
 ]
