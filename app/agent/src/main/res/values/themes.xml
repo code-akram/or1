@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="background">#1A1918</color>
+    <color name="background">#000000</color>
 
     <!-- Dark from the first frame: no white flash and no default splash icon. -->
     <style name="Theme.Or1" parent="@android:style/Theme.Material.NoActionBar">

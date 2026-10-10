@@ -16,9 +16,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.or1.agent.R
 
-/** Warm near-black palette, a white primary action and a single terracotta accent used sparingly. */
+/**
+ * Pure black background (continuous with the boot screens, see brand/), warm near-black surfaces, a white primary action
+ * and a single terracotta accent used sparingly.
+ */
 object Palette {
-    val Background = Color(0xFF1A1918)
+    val Background = Color(0xFF000000)
     val Surface = Color(0xFF262624)
     val SurfaceHigh = Color(0xFF30302E)
     val SurfaceSunken = Color(0xFF141413)

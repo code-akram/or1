@@ -28,7 +28,8 @@ python3 brand/make_boot.py backup/20261009-202452/by-name/logo.bin   # -> brand/
 | Wallpaper (shown behind "Phone is starting…") | framework default | black | `DebugReceiver --es wallpaper black` (`provision.sh`) |
 | Shutdown | default | or1 | `out/shutdownanimation.zip` |
 
-The chat itself starts on the app's charcoal (`#1A1918`) with no splash icon.
+The chat is pure black too (`Palette.Background`, and the window background so the first frame is black), with no
+splash icon.
 
 ## Logo partition (needs the Mac)
 
