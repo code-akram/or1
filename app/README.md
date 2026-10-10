@@ -157,6 +157,11 @@ The user doesn't use apps on this phone; the agent does. The app closes the syst
 - Secure settings, saved and restored on release: notifications hidden on the lock screen, camera gestures
   (double-press power) off.
 - launcher3 disabled (`provision.sh`); the viewer is watch-only; no "Bring to front".
+- Wi-Fi only: mobile data off (`provision.sh`). Settings' "Choose SIM for mobile data" dialog, which opened over the
+  chat after a boot, is disabled (`SimSelectNotification`, `SimDialogActivity`; also its "SIM cards changed"
+  notification), and the phone service's `alert` channel ("SIM not provisioned") is blocked. That package's
+  notification permission is system-fixed, so it's blocked per channel through `INotificationManager`
+  (STATUS_BAR_SERVICE), as Settings does. Both come back with the lockdown off.
 - No navigation bar at all: `persist.sys.phh.mainkeys=1` (`provision.sh`; TrebleDroid turns it into
   `qemu.hw.mainkeys=1` at boot, so the system acts as if the phone had hardware keys). Without its buttons it was an
   empty 48dp strip holding the composer off the bottom edge and sitting under the keyboard. Needs a reboot; `0` and a

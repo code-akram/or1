@@ -1,6 +1,10 @@
 package com.or1.agent
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.ComponentName
 import android.content.Context
+import android.content.pm.PackageManager
 import android.provider.Settings
 import android.util.Log
 
@@ -13,6 +17,9 @@ import android.util.Log
  * Status-bar part: StatusBarManager.disable/disable2 (hidden; STATUS_BAR, granted by the platform signature), the
  * mechanism behind kiosk mode. The flags are held against this process, so they lift by themselves if it dies (a crash
  * can't strand the phone). Flag values are read from the platform by name. The power menu stays (power off, restart).
+ * The phone is Wi-Fi only, so cellular noise goes too: Settings' "Choose SIM for mobile data" dialog after a boot (and
+ * its "SIM cards changed" notification) is disabled, and the phone service's alert channel ("SIM not provisioned") is
+ * blocked. Its notification permission is system-fixed, so it's blocked per channel, as Settings would.
  * Dev: `DebugReceiver --es lockdown off|on` (remembered across restarts).
  */
 object Lockdown {
@@ -32,6 +39,14 @@ object Lockdown {
         "DISABLE_NOTIFICATION_ICONS", "DISABLE_NOTIFICATION_ALERTS", "DISABLE_NOTIFICATION_TICKER",
     )
     private val DISABLE2 = listOf("DISABLE2_QUICK_SETTINGS", "DISABLE2_NOTIFICATION_SHADE")
+
+    /** Disabled while locked down; back to their default state on release. */
+    private val COMPONENTS = listOf(
+        ComponentName("com.android.settings", "com.android.settings.sim.SimSelectNotification"),
+        ComponentName("com.android.settings", "com.android.settings.sim.SimDialogActivity"),
+    )
+    /** Notification channels blocked while locked down (package to channel id); their importance is restored on release. */
+    private val CHANNELS = listOf("com.android.phone" to "alert")
 
     private lateinit var context: Context
     // Kept for the process's life: the disable flags are tied to this manager's token.
@@ -56,6 +71,14 @@ object Lockdown {
             if (!prefs.contains(SAVED + key)) prefs.edit().putInt(SAVED + key, Settings.Secure.getInt(resolver, key, -1)).apply()
             Settings.Secure.putInt(resolver, key, locked)
         }
+        for (component in COMPONENTS) setComponent(component, PackageManager.COMPONENT_ENABLED_STATE_DISABLED)
+        for ((pkg, id) in CHANNELS) {
+            val channel = channel(pkg, id) ?: continue
+            val key = SAVED + "channel:$pkg/$id"
+            if (channel.importance == NotificationManager.IMPORTANCE_NONE) continue
+            prefs.edit().putInt(key, channel.importance).apply()
+            setImportance(pkg, channel, NotificationManager.IMPORTANCE_NONE)
+        }
     }
 
     /** Dev escape hatch: lifts everything and remembers it until [setEnabled] true. */
@@ -69,6 +92,13 @@ object Lockdown {
                 val before = prefs.getInt(SAVED + key, -1)
                 if (before == -1) Settings.Secure.putString(context.contentResolver, key, null) else Settings.Secure.putInt(context.contentResolver, key, before)
                 prefs.edit().remove(SAVED + key).apply()
+            }
+            for (component in COMPONENTS) setComponent(component, PackageManager.COMPONENT_ENABLED_STATE_DEFAULT)
+            for ((pkg, id) in CHANNELS) {
+                val key = SAVED + "channel:$pkg/$id"
+                if (!prefs.contains(key)) continue
+                channel(pkg, id)?.let { setImportance(pkg, it, prefs.getInt(key, NotificationManager.IMPORTANCE_DEFAULT)) }
+                prefs.edit().remove(key).apply()
             }
         }
         Log.i(TAG, "lockdown ${if (on) "on" else "off"}")
@@ -88,6 +118,41 @@ object Lockdown {
             bar.javaClass.getMethod("disable2", Int::class.javaPrimitiveType).invoke(bar, what2)
         } catch (e: Exception) {
             Log.e(TAG, "StatusBarManager.disable failed", e)
+        }
+    }
+
+    private fun setComponent(component: ComponentName, state: Int) {
+        try {
+            context.packageManager.setComponentEnabledSetting(component, state, PackageManager.DONT_KILL_APP)
+        } catch (e: Exception) {
+            Log.w(TAG, "can't set $component to $state", e)
+        }
+    }
+
+    // INotificationManager, hidden; both calls need STATUS_BAR_SERVICE (system or SystemUI), as Settings uses them.
+    private val notificationService by lazy { NotificationManager::class.java.getMethod("getService").invoke(null) }
+
+    private fun channel(pkg: String, id: String): NotificationChannel? = try {
+        val uid = context.packageManager.getPackageUid(pkg, 0)
+        val list = notificationService.javaClass
+            .getMethod("getNotificationChannelsForPackage", String::class.java, Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType)
+            .invoke(notificationService, pkg, uid, false)
+        @Suppress("UNCHECKED_CAST")
+        (list.javaClass.getMethod("getList").invoke(list) as List<NotificationChannel>).find { it.id == id }
+    } catch (e: Exception) {
+        Log.w(TAG, "can't read channel $pkg/$id", e)
+        null
+    }
+
+    private fun setImportance(pkg: String, channel: NotificationChannel, importance: Int) {
+        try {
+            channel.importance = importance
+            val uid = context.packageManager.getPackageUid(pkg, 0)
+            notificationService.javaClass
+                .getMethod("updateNotificationChannelForPackage", String::class.java, Int::class.javaPrimitiveType, NotificationChannel::class.java)
+                .invoke(notificationService, pkg, uid, channel)
+        } catch (e: Exception) {
+            Log.e(TAG, "can't set ${pkg}/${channel.id} to $importance", e)
         }
     }
 }
