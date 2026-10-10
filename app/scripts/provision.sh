@@ -57,6 +57,10 @@ adb shell setprop persist.sys.phh.mainkeys 1
 # dialog and SIM notifications are handled by the lockdown.
 adb shell "settings put global airplane_mode_radios cell,nfc,wimax; cmd connectivity airplane-mode enable; \
   svc data disable; settings put secure icon_blacklist rotate,headset,airplane"
+# Nothing but or1 from boot on: no lock screen (there's no PIN to lose) and a plain black wallpaper. The boot screens
+# themselves (logo partition, boot animation) are in brand/README.md.
+adb shell locksettings set-disabled true
+adb shell am broadcast -n $PKG/.DebugReceiver --es wallpaper black >/dev/null
 
 echo "== back to non-root adb"
 adb unroot >/dev/null; sleep 3; adb wait-for-device

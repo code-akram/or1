@@ -44,7 +44,8 @@ class AgentService : Service() {
  * `--ez stop true` stops the request or routine run in progress (e.g. one waiting on an approval);
  * `--es dismiss pkg1,pkg2` clears those apps' notifications (eval cleanup: the shell can't clear other apps');
  * `--es audio test` runs the speaker/mic check, `--es audio listen` just measures what the mic hears ([AudioCheck];
- * result in logcat tag or1-audio and files/audio.txt).
+ * result in logcat tag or1-audio and files/audio.txt);
+ * `--es wallpaper black` sets a plain black wallpaper on home and lock (provisioning: nothing but or1 from boot on).
  *
  * Hidden display checks: `--es display info|create|launch|tap|back|home|park|restore|focus|snap|front|move|tool [--es name N --es args JSON] [--es pkg P] [--ei x X --ei y Y]
  * [--ei task T]`; results go to logcat (tag or1-display) and files/display.txt.
@@ -58,6 +59,13 @@ class DebugReceiver : BroadcastReceiver() {
         intent.getStringExtra("lockdown")?.let { Lockdown.setEnabled(it != "off"); return }
         intent.getLongExtra("backdate_chat_ms", 0).takeIf { it > 0 }?.let { AgentHub.backdateChat(it); return }
         intent.getStringExtra("dismiss")?.let { NotifListener.dismiss(it.split(',').toSet()); return }
+        if (intent.getStringExtra("wallpaper") == "black") {
+            val black = android.graphics.Bitmap.createBitmap(72, 160, android.graphics.Bitmap.Config.ARGB_8888)
+            black.eraseColor(android.graphics.Color.BLACK)
+            val flags = android.app.WallpaperManager.FLAG_SYSTEM or android.app.WallpaperManager.FLAG_LOCK
+            android.app.WallpaperManager.getInstance(context).setBitmap(black, null, true, flags)
+            return
+        }
         intent.getStringExtra("audio")?.let { mode ->
             kotlin.concurrent.thread {
                 val check = AudioCheck(context.applicationContext)
