@@ -157,6 +157,9 @@ The user doesn't use apps on this phone; the agent does. The app closes the syst
 - Secure settings, saved and restored on release: notifications hidden on the lock screen, camera gestures
   (double-press power) off.
 - launcher3 disabled (`provision.sh`); the viewer is watch-only; no "Bring to front".
+- The chat hides the now-empty navigation bar (`MainActivity`), so the composer sits at the bottom edge with the
+  keyboard closed; a swipe up shows the empty bar for a moment. Android's "Viewing full screen" tip is marked as seen
+  (`immersive_mode_confirmations`), since its swipe-down exit is locked too.
 - Notifications reach the user through the chat: other apps' as suggestions and through the agent's notifications
   tool, routines' as banners (see Routines). The chat makes its own chime, since the lockdown mutes notification
   sounds.

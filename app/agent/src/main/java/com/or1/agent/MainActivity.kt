@@ -9,6 +9,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.or1.agent.ui.ChatScreen
 
 /** The phone's home screen: the chat composer. */
@@ -29,6 +32,22 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         // Cheap; covers a SystemUI restart, which drops the flags.
         Lockdown.apply()
+        hideEmptyNavBar()
+    }
+
+    /**
+     * Locked down, the navigation bar has no buttons but still takes 48dp at the bottom, which held the composer off
+     * the edge. Hide it so the composer sits at the bottom (above the keyboard while typing). A swipe up shows the
+     * empty bar for a moment. Lockdown marks Android's full-screen tip as seen.
+     */
+    private fun hideEmptyNavBar() {
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        if (Lockdown.enabled) {
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.navigationBars())
+        } else {
+            controller.show(WindowInsetsCompat.Type.navigationBars())
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
