@@ -37,6 +37,10 @@ flags need signature permissions, which the platform key grants (see the manifes
   so `injectKey` focuses the hidden display for the key and restores it afterwards; the composer reopens the
   keyboard if that closed it (`HiddenDisplay.focusReturned`). IME policy is FALLBACK (LOCAL in the viewer):
   HIDE unbinds the IME from every display during those brief focus changes and it never re-binds.
+- Leftovers: when the app process dies, DisplayManager drops the display, but WindowManager keeps it while a
+  root task is left on it. Settings (activity embedding) leaves one: an empty task whose TaskFragments its
+  organizer never removes. Before creating a display, `releaseStaleDisplays()` force-stops the apps owning
+  tasks on displays DisplayManager no longer has (not ones with a task on a live display), which releases them.
 - `shell` exports `OR1_DISPLAY`; the phone prompt (`proto/scripts/export_agent_json.py`) tells the model to
   use `am start --display $OR1_DISPLAY` and `input -d $OR1_DISPLAY`.
 - Debug: `am broadcast -n com.or1.agent/.DebugReceiver --es display info|create|launch|tap|back|home|park|snap|front|move|tool …`

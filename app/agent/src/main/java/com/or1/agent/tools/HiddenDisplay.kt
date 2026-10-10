@@ -115,6 +115,7 @@ object HiddenDisplay {
     }
 
     private fun create(): Int {
+        releaseStaleDisplays()
         val metrics = context.getSystemService(DisplayManager::class.java).getDisplay(Display.DEFAULT_DISPLAY)
         val size = android.graphics.Point().also { @Suppress("DEPRECATION") metrics.getRealSize(it) }
         val dpi = context.resources.displayMetrics.densityDpi
@@ -453,6 +454,36 @@ object HiddenDisplay {
     } catch (e: Exception) {
         Log.w(TAG, "getAllRootTaskInfosOnDisplay failed", e)
         emptyList()
+    }
+
+    /**
+     * Frees hidden displays left behind by an earlier process of this app. DisplayManager drops a virtual display
+     * when its owner dies, but WindowManager keeps the display until its last root task is gone. Apps that embed
+     * activities (Settings) leave an empty task there: their activities finish, but the TaskFragments they organize
+     * stay until the organizer removes them, which it never does for a removed display. Force-stopping the app
+     * makes WindowManager drop its TaskFragments, the task, and then the display. Skipped for an app that still has a
+     * task on a live display, so this never closes something the user has open.
+     */
+    private fun releaseStaleDisplays() {
+        try {
+            val live = context.getSystemService(DisplayManager::class.java).displays.map { it.displayId }.toSet()
+            val infos = atm!!.javaClass.getMethod("getAllRootTaskInfos").invoke(atm) as List<*>
+            val cls = Class.forName("android.app.TaskInfo")
+            val tasks = infos.filterNotNull().map { info ->
+                val intent = cls.getField("baseIntent").get(info) as Intent?
+                val pkg = intent?.component?.packageName ?: (cls.getField("realActivity").get(info) as android.content.ComponentName?)?.packageName
+                cls.getField("displayId").getInt(info) to pkg
+            }
+            val (stale, current) = tasks.partition { it.first !in live }
+            val inUse = current.mapNotNull { it.second }.toSet()
+            val packages = stale.mapNotNull { it.second }.toSet() - inUse - context.packageName
+            if (stale.isEmpty()) return
+            Log.i(TAG, "stale displays ${stale.map { it.first }.distinct()}; force-stopping $packages")
+            val am = context.getSystemService(android.app.ActivityManager::class.java)
+            for (pkg in packages) am.javaClass.getMethod("forceStopPackage", String::class.java).invoke(am, pkg)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not release stale displays", e)
+        }
     }
 
     private fun topTaskOf(pkg: String, displayId: Int): Int? = tasksOn(displayId).firstOrNull { it.second == pkg }?.first
