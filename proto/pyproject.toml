@@ -1,0 +1,20 @@
+[project]
+name = "or1"
+version = "0.1.0"
+description = "Phase 0 prototype: Claude agent driving the RAVOZ phone over ADB"
+authors = [
+    { name = "Akram Ahmed", email = "akram012388@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "anthropic>=1.13.0",
+    "pillow>=12.3.0",
+]
+
+[project.scripts]
+or1 = "or1.cli:main"
+or1-eval = "or1.eval:main"
+
+[build-system]
+requires = ["uv_build>=0.12.20,<0.13.0"]
+build-backend = "uv_build"
