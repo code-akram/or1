@@ -1,7 +1,9 @@
-"""Trends across eval runs (runs/eval-*.jsonl): pass rate, cost and time per run, and each task's history.
+"""Trends across eval runs (runs/eval-*.jsonl): pass rate, cost and time per run, and each task's history. Also the
+phone's request gaps (or1-gaps), to check the prompt cache's 1-hour TTL against real use.
 
     uv run or1-eval-report                # last 10 phone runs
     uv run or1-eval-report --runs 20 --target all
+    uv run or1-gaps
 
 Tasks are matched by their text, since numbers shift when tasks are added. A task is a regression when its latest
 judged result failed after it passed in the run before.
@@ -111,3 +113,45 @@ def main() -> None:
     args = parser.parse_args()
     runs = [r for r in load_runs(args.dir) if args.target == "all" or r.target == args.target]
     print(render(runs[-args.runs:]))
+
+
+# --- Request gaps (files/request-gaps.jsonl on the phone): is the 1-hour cache TTL right for real use? -------------
+
+BUCKETS = (("< 5 min", 300), ("5-60 min", 3600), ("> 60 min", float("inf")))
+
+
+def bucket_gaps(records: list[dict], field: str, kinds: tuple[str, ...] = ("chat", "routine")) -> dict[str, int]:
+    """Count gaps in `field` (since_any_s or since_chat_s) per bucket, for the given kinds (evals left out)."""
+    counts = {name: 0 for name, _ in BUCKETS} | {"first": 0}
+    for r in records:
+        if r.get("kind") not in kinds:
+            continue
+        gap = r.get(field)
+        if gap is None:
+            counts["first"] += 1
+        else:
+            counts[next(name for name, limit in BUCKETS if gap < limit)] += 1
+    return counts
+
+
+def render_gaps(records: list[dict]) -> str:
+    real = [r for r in records if r.get("kind") in ("chat", "routine")]
+    if not real:
+        return "No chat or routine requests logged yet (eval requests are left out)."
+    lines = [f"{len(real)} requests ({sum(r['kind'] == 'chat' for r in real)} chat, "
+             f"{sum(r['kind'] == 'routine' for r in real)} routine), "
+             f"{sum(1 for r in real if r.get('auto_new_chat'))} started a new chat after an hour idle."]
+    for field, what in (("since_any_s", "since the previous request (shared system-prompt cache)"),
+                        ("since_chat_s", "since the previous message in the same chat (conversation cache)")):
+        counts = bucket_gaps(records, field, ("chat",) if field == "since_chat_s" else ("chat", "routine"))
+        total = sum(counts.values()) or 1
+        lines.append(f"Gap {what}:")
+        lines += [f"  {name:>9}  {n:>4}  {n / total:>4.0%}" for name, n in counts.items()]
+    lines.append("1-hour TTL hits on < 5 min and 5-60 min; a 5-minute TTL would hit only on < 5 min.")
+    return "\n".join(lines)
+
+
+def gaps_main() -> None:
+    from . import adb
+    out = adb.shell("run-as com.or1.agent cat files/request-gaps.jsonl 2>/dev/null || true")
+    print(render_gaps([json.loads(l) for l in out.splitlines() if l.strip()]))

@@ -46,5 +46,8 @@ description, Settings is opened on the work display first and the reply must men
 
 Unit tests for the pure helpers (no phone): `uv run pytest`. CI runs them on every push.
 
+`uv run or1-gaps` summarises the phone's request gaps (`files/request-gaps.jsonl`, evals left out): how often the
+next request comes within 5 minutes, 5-60 minutes or over an hour, to check the prompt cache's 1-hour TTL.
+
 `uv run or1-eval-report` shows trends across the saved runs (`runs/eval-*.jsonl`, matched by task text): pass rate,
 cost and median time per run, a pass/fail history per task, and regressions (a pass followed by a fail). Cleanup removes only the routines the eval created.

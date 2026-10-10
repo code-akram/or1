@@ -156,6 +156,14 @@ DeadObjectException as root, while inserts still work.
   5-minute one. Until 2026-10-10 there was no `cache_control` at all on the belief that the account cached
   automatically; the responses showed zero cache reads and writes. Now the first request writes ~4.2K tokens at
   1h and later ones read them (`usage.cache_creation.ephemeral_1h_input_tokens`, `cache_read_input_tokens`).
+- A chat idle for over an hour (the cache TTL) starts a new conversation on the next message, with a note in the
+  chat: past that point the whole history would be re-written to the cache anyway. Each new chat (this, or the New
+  chat button) gets its own transcript, so the earlier one is a separate entry under past chats in the menu;
+  eval requests share one transcript so they don't flood it. Long-term memory notes carry over, by design.
+- Every chat and routine request logs its gap since the previous request (the shared system-prompt cache) and since
+  the previous message in that chat (the conversation cache) to `files/request-gaps.jsonl`; `uv run or1-gaps` in
+  `proto/` buckets them (< 5 min, 5-60 min, > 60 min, evals left out) to check the 1-hour TTL against real use.
+  Debug: `--el backdate_chat_ms N` makes the chat look N ms more idle.
 - Each user message starts with `[Now: <local time>]` (not the system prompt, which must stay byte-stable for the
   cache), so relative dates need no `device get` call.
 

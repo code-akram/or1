@@ -15,6 +15,7 @@ dependencies = [
 or1 = "or1.cli:main"
 or1-eval = "or1.eval:main"
 or1-eval-report = "or1.report:main"
+or1-gaps = "or1.report:gaps_main"
 
 [build-system]
 requires = ["uv_build>=0.12.20,<0.13.0"]

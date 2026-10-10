@@ -42,3 +42,16 @@ def test_render_marks_and_new_tasks(tmp_path):
     assert "✓✓  " in out and " ·  " in out
     assert out.index("old task") < out.index("new task")
     assert "Regressions: none" in out
+
+
+def test_gap_buckets_leave_out_evals():
+    records = [
+        {"kind": "chat", "since_any_s": None, "since_chat_s": None},
+        {"kind": "chat", "since_any_s": 30, "since_chat_s": 30},
+        {"kind": "routine", "since_any_s": 900, "since_chat_s": None},
+        {"kind": "chat", "since_any_s": 5000, "since_chat_s": 7200, "auto_new_chat": True},
+        {"kind": "eval", "since_any_s": 2, "since_chat_s": 2},
+    ]
+    assert report.bucket_gaps(records, "since_any_s") == {"< 5 min": 1, "5-60 min": 1, "> 60 min": 1, "first": 1}
+    assert report.bucket_gaps(records, "since_chat_s", ("chat",)) == {"< 5 min": 1, "5-60 min": 0, "> 60 min": 1, "first": 1}
+    assert "1 started a new chat" in report.render_gaps(records)
