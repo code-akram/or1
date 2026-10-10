@@ -19,7 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.windowInsetsTopHeight
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,9 +41,10 @@ import java.util.Calendar
 import kotlinx.coroutines.delay
 
 /**
- * The status bar, redrawn: SystemUI draws nothing there (clock and icons are off, see Lockdown), and this rail sits in
- * its place. Pixel-block modules on a thin rail, in the boot wordmark's style (brand/make_boot.py has the same glyphs):
- * or1 (blocks march while the agent works) · time · Wi-Fi bars · battery cells, + while charging.
+ * The status bar, redrawn: SystemUI draws nothing there (clock and icons are off, see Lockdown), and this rail sits just
+ * below it, clear of the camera notch, taking [RAIL_HEIGHT] from the screens under it. Pixel-block modules on a thin
+ * rail, in the boot wordmark's style (brand/make_boot.py has the same glyphs):
+ * or1 (blocks march while the agent works) · time · Wi-Fi bars · battery level.
  */
 @Composable
 fun StatusRail(busy: Boolean, modifier: Modifier = Modifier) {
@@ -55,10 +56,13 @@ fun StatusRail(busy: Boolean, modifier: Modifier = Modifier) {
             delay(5_000)
         }
     }
-    Box(modifier.fillMaxWidth().windowInsetsTopHeight(WindowInsets.statusBars), contentAlignment = Alignment.Center) {
+    Box(
+        modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars).height(RAIL_HEIGHT),
+        contentAlignment = Alignment.Center,
+    ) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Bottom,
         ) {
             Module { Wordmark(); Marching(busy) }
             Rail()
@@ -66,12 +70,8 @@ fun StatusRail(busy: Boolean, modifier: Modifier = Modifier) {
             Rail()
             Module { WifiBars(state.wifiLevel) }
             Rail(Modifier.width(10.dp))
-            Module {
-                val low = state.battery in 0..15 && !state.charging
-                Glyphs(if (state.battery >= 0) "${state.battery}" else "--", if (low) Palette.Accent else Palette.TextDim)
-                BatteryCells(state.battery, low)
-                if (state.charging) Glyphs("+", Palette.Text)
-            }
+            // The battery is just its number: bright while charging, grey otherwise.
+            Module { Glyphs(if (state.battery >= 0) "${state.battery}" else "--", if (state.charging) Palette.Text else Palette.TextDim) }
         }
     }
 }
@@ -104,6 +104,8 @@ private fun read(context: Context): RailState {
     return RailState(time, wifiLevel, level, charging)
 }
 
+private val RAIL_HEIGHT: Dp = 26.dp
+
 private val BLOCK: Dp = 2.dp
 private val GAP: Dp = 6.dp
 
@@ -117,13 +119,13 @@ private fun Module(content: @Composable RowScope.() -> Unit) {
     )
 }
 
-/** The rail between modules: a hairline at mid-height. */
+/** The rail between modules: a hairline at the text's mid-height (modules sit on a common bottom line). */
 @Composable
 private fun RowScope.Rail(modifier: Modifier = Modifier.weight(1f)) {
-    Canvas(modifier.height(1.dp)) { drawRect(Palette.Border) }
+    Canvas(modifier.padding(bottom = BLOCK * PixelFont.HEIGHT / 2 - 0.5.dp).height(1.dp)) { drawRect(Palette.Border) }
 }
 
-/** Text in the pixel font, bottoms aligned (the wordmark's glyphs are 4 rows, the rest 5). */
+/** Text in the pixel font, bottoms aligned (the x glyph is 3 rows, the rest 5). */
 @Composable
 private fun Glyphs(text: String, color: Color) {
     val glyphs = text.map { PixelFont.glyph(it) }
@@ -141,14 +143,13 @@ private fun Glyphs(text: String, color: Color) {
     }
 }
 
-/** The boot wordmark: one square per pixel, sitting on a 5-row line (the rail's), or on its own (the drawer's). */
+/** The boot wordmark: one square per pixel, on the rail's bottom line, or on its own (the drawer's). */
 @Composable
 fun Wordmark(block: Dp = BLOCK, color: Color = Palette.Text, modifier: Modifier = Modifier) {
     val rows = PixelFont.WORDMARK
-    Canvas(modifier.size(block * rows[0].length, block * PixelFont.HEIGHT)) {
+    Canvas(modifier.size(block * rows[0].length, block * rows.size)) {
         val b = block.toPx()
-        val top = PixelFont.HEIGHT - rows.size
-        rows.forEachIndexed { r, row -> row.forEachIndexed { c, ch -> if (ch == '#') block(c, top + r, b, color) } }
+        rows.forEachIndexed { r, row -> row.forEachIndexed { c, ch -> if (ch == '#') block(c, r, b, color) } }
     }
 }
 
@@ -187,23 +188,6 @@ private fun WifiBars(level: Int) {
     }
 }
 
-/** Ten cells, one per 10%, each 2x3 blocks. */
-@Composable
-private fun BatteryCells(level: Int, low: Boolean) {
-    val lit = if (level < 0) 0 else (level + 5) / 10
-    Canvas(Modifier.size(BLOCK * 29, BLOCK * PixelFont.HEIGHT)) {
-        val b = BLOCK.toPx()
-        for (i in 0..9) {
-            val color = when {
-                i >= lit -> Palette.Border
-                low -> Palette.Accent
-                else -> Palette.Text
-            }
-            for (r in 1..3) for (c in 0..1) block(i * 3 + c, PixelFont.HEIGHT - r, b, color)
-        }
-    }
-}
-
 private fun DrawScope.block(col: Int, row: Int, b: Float, color: Color) =
     drawRect(color, topLeft = Offset(col * b, row * b), size = Size(b, b))
 
@@ -211,10 +195,14 @@ private fun DrawScope.block(col: Int, row: Int, b: Float, color: Color) =
 object PixelFont {
     const val HEIGHT = 5
 
-    /** The wordmark, as on the boot screens: o, r and 1 at x-height (4 rows). */
+    /** The wordmark, as on the boot screens: o and r at x-height (4 rows), the 1 twice that, on the same bottom line. */
     val WORDMARK = listOf(
+        "         #",
+        "        ##",
+        "         #",
+        "         #",
         "### ###  #",
-        "# # #   ##",
+        "# # #    #",
         "# # #    #",
         "### #    #",
     )

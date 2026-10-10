@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -138,76 +140,78 @@ fun ChatScreen() {
             focusManager.clearFocus()
         }
 
-        Box(Modifier.fillMaxSize()) {
-            ModalNavigationDrawer(
-                drawerState = drawer,
-                drawerContent = {
-                    Drawer(
-                        totalCost = totalCost,
-                        routineCount = routines.size,
-                        onNewChat = { AgentHub.newConversation(); scope.launch { drawer.close() } },
-                        onRoutines = { routinesOpen = true; scope.launch { drawer.close() } },
-                        onOpen = { pastChat = it; scope.launch { drawer.close() } },
-                        open = drawer.isOpen,
-                    )
-                },
-            ) {
-                Box(Modifier.fillMaxSize().background(Palette.Background)) {
-                    Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
-                        TopBar(
-                            showDot = suggestions.any { it.appIcon != null },
-                            showNewChat = items.isNotEmpty(),
-                            onMenu = { scope.launch { drawer.open() } },
-                            onNewChat = { AgentHub.newConversation() },
+        // The rail first, below the status bar and the notch; every screen and the drawer below it.
+        Column(Modifier.fillMaxSize().background(Palette.Background)) {
+            StatusRail(busy)
+            Box(Modifier.weight(1f).consumeWindowInsets(WindowInsets.statusBars)) {
+                ModalNavigationDrawer(
+                    drawerState = drawer,
+                    drawerContent = {
+                        Drawer(
+                            totalCost = totalCost,
+                            routineCount = routines.size,
+                            onNewChat = { AgentHub.newConversation(); scope.launch { drawer.close() } },
+                            onRoutines = { routinesOpen = true; scope.launch { drawer.close() } },
+                            onOpen = { pastChat = it; scope.launch { drawer.close() } },
+                            open = drawer.isOpen,
                         )
-                        for (alert in alerts) {
-                            AlertBanner(alert, onOpen = { routinesOpen = true }, onDismiss = { AgentHub.dismissAlert(alert.id) })
-                        }
-                        // Tapping empty space closes the keyboard: with the system UI locked down there's no back button.
-                        Box(
-                            Modifier.weight(1f).fillMaxWidth().clickable(
-                                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                                indication = null,
-                            ) {
-                                focusManager.clearFocus()
-                                if (text.isBlank()) expanded = false
-                            },
-                        ) {
-                            if (items.isEmpty()) {
-                                EmptyState(suggestions, onSuggestion = { send(it.prompt) })
-                            } else {
-                                // A list per conversation: the old turns' exit animations otherwise get stuck when the
-                                // items are replaced in one go (a fresh conversation), leaving them drawn under the new one.
-                                key(conversation) { Conversation(items, busy, preview, onOpenPreview = { viewerOpen = true }) }
+                    },
+                ) {
+                    Box(Modifier.fillMaxSize().background(Palette.Background)) {
+                        Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
+                            TopBar(
+                                showDot = suggestions.any { it.appIcon != null },
+                                showNewChat = items.isNotEmpty(),
+                                onMenu = { scope.launch { drawer.open() } },
+                                onNewChat = { AgentHub.newConversation() },
+                            )
+                            for (alert in alerts) {
+                                AlertBanner(alert, onOpen = { routinesOpen = true }, onDismiss = { AgentHub.dismissAlert(alert.id) })
                             }
-                        }
-                        Composer(
-                            text = text,
-                            onText = { text = it },
-                            busy = busy,
-                            expanded = expanded || text.isNotEmpty(),
-                            onExpand = { expanded = it },
-                            model = AgentHub.model,
-                            effort = effort,
-                            onEffort = AgentHub::setEffort,
-                            onSend = { send(text) },
-                            onStop = AgentHub::stop,
-                            onPlusAction = {
-                                when (it) {
-                                    PlusAction.NEW_CHAT -> AgentHub.newConversation()
-                                    PlusAction.WORK_SCREEN -> viewerOpen = true
+                            // Tapping empty space closes the keyboard: with the system UI locked down there's no back button.
+                            Box(
+                                Modifier.weight(1f).fillMaxWidth().clickable(
+                                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                    indication = null,
+                                ) {
+                                    focusManager.clearFocus()
+                                    if (text.isBlank()) expanded = false
+                                },
+                            ) {
+                                if (items.isEmpty()) {
+                                    EmptyState(suggestions, onSuggestion = { send(it.prompt) })
+                                } else {
+                                    // A list per conversation: the old turns' exit animations otherwise get stuck when the
+                                    // items are replaced in one go (a fresh conversation), leaving them drawn under the new one.
+                                    key(conversation) { Conversation(items, busy, preview, onOpenPreview = { viewerOpen = true }) }
                                 }
-                            },
-                            modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 10.dp),
-                        )
+                            }
+                            Composer(
+                                text = text,
+                                onText = { text = it },
+                                busy = busy,
+                                expanded = expanded || text.isNotEmpty(),
+                                onExpand = { expanded = it },
+                                model = AgentHub.model,
+                                effort = effort,
+                                onEffort = AgentHub::setEffort,
+                                onSend = { send(text) },
+                                onStop = AgentHub::stop,
+                                onPlusAction = {
+                                    when (it) {
+                                        PlusAction.NEW_CHAT -> AgentHub.newConversation()
+                                        PlusAction.WORK_SCREEN -> viewerOpen = true
+                                    }
+                                },
+                                modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 10.dp),
+                            )
+                        }
+                        pastChat?.let { HistoryView(it, onClose = { pastChat = null }) }
+                        if (routinesOpen) RoutinesView(onClose = { routinesOpen = false }, onOpenPreview = { viewerOpen = true })
+                        if (viewerOpen) WorkViewer(onClose = { viewerOpen = false })
                     }
-                    pastChat?.let { HistoryView(it, onClose = { pastChat = null }) }
-                    if (routinesOpen) RoutinesView(onClose = { routinesOpen = false }, onOpenPreview = { viewerOpen = true })
-                    if (viewerOpen) WorkViewer(onClose = { viewerOpen = false })
                 }
             }
-            // In the status bar's place, over every screen and the drawer.
-            StatusRail(busy, Modifier.align(Alignment.TopCenter))
         }
     }
 }
