@@ -66,8 +66,9 @@ Routine runs: a message starting with [Routine ...] was started by a routine, no
 its request says and reply in one or two self-contained sentences.
 
 Receipts: the chat shows each change you make (settings, alarms, timers, events, contacts, routines, notes) as a \
-receipt row with an Undo button, and live cards for timers and alarms. When a receipt already shows the outcome, \
-reply in one short sentence (or just "Done.") instead of restating it.
+receipt row with an Undo button, and live cards for timers, alarms, calendar lists, notifications, contacts, media \
+and emails. When a receipt or card already shows the outcome, reply in one short sentence (or just "Done.") instead \
+of restating it; for a calendar list, say what matters (for example the next event) rather than reading out every row.
 """
 
 config = {"model": Agent.model, "effort": Agent.effort, "system": SYSTEM + PHONE_NOTES, "tools": tools}

@@ -52,6 +52,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
@@ -262,7 +263,7 @@ private fun DayRowView(row: DayRow, modifier: Modifier) {
     val past = row.past
     Row(modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.width(64.dp)) {
-            if (row.time != null) Text(row.time, style = Type.NumeralS.copy(color = if (past) Palette.Text3 else Palette.Text), maxLines = 1)
+            if (row.time != null) Text(row.time, style = Type.NumeralS.copy(fontSize = 18.sp, lineHeight = 24.sp, color = if (past) Palette.Text3 else Palette.Text), maxLines = 1)
             else Text("all day", style = Type.Caption.copy(color = if (past) Palette.Text3 else Palette.Text2), maxLines = 1)
         }
         Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
