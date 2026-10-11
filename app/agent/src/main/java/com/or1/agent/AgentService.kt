@@ -186,13 +186,14 @@ private fun voiceCommand(context: Context, command: String) {
                 command.startsWith("speak:") -> debugSpeak(context, command.removePrefix("speak:"))
                 command == "listen" -> debugListen(context)
                 command.startsWith("selftest") -> debugSelfTest(context, command.substringAfter(':', "Set a timer for ten minutes."))
+                command.startsWith("play:") -> debugSelfTest(context, command.removePrefix("play:"), listen = false)
                 command == "support" || command == "download" -> debugSupport(context, download = command == "download")
                 command == "stop" -> {
                     VoiceEngines.output(context).stop()
                     VoiceEngines.input(context).cancel()
                     "stopped"
                 }
-                else -> "unknown voice command '$command' (speak:<text>, listen, selftest[:<text>], stop, support, download)"
+                else -> "unknown voice command '$command' (speak:<text>, listen, selftest[:<text>], play:<text>, stop, support, download)"
             }
         } catch (e: Exception) {
             "error: $e"
@@ -240,7 +241,7 @@ private suspend fun debugSupport(context: Context, download: Boolean): String {
  * Speech in, without a person: the phrase is synthesised to a file, then played through a MediaPlayer while listening.
  * The player takes no audio focus, so the recogniser's focus request doesn't pause it the way it pauses TTS.
  */
-private suspend fun debugSelfTest(context: Context, phrase: String): String = kotlinx.coroutines.coroutineScope {
+private suspend fun debugSelfTest(context: Context, phrase: String, listen: Boolean = true): String = kotlinx.coroutines.coroutineScope {
     val wav = java.io.File(context.cacheDir, "voice-selftest.wav")
     val synthesised = kotlinx.coroutines.withTimeoutOrNull(20_000) {
         kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { cont ->
@@ -264,6 +265,13 @@ private suspend fun debugSelfTest(context: Context, phrase: String): String = ko
             .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
         setDataSource(wav.path)
         prepare()
+    }
+    // play: only the sound, for driving the UI's own listening (push-to-talk, voice mode) from adb.
+    if (!listen) {
+        player.start()
+        kotlinx.coroutines.delay(player.duration.toLong() + 200)
+        player.release()
+        return@coroutineScope "played: \"$phrase\""
     }
     val play = launch {
         kotlinx.coroutines.delay(800)

@@ -273,7 +273,7 @@ ElevenLabs).
 - `<queries>` for `RecognitionService` and `TTS_SERVICE` in the manifest (targetSdk 33 package visibility).
 - Debug: `--es voice speak:<text>`, `--es voice listen` (one utterance; up to 20 s, then stop), `--es voice
   selftest[:<text>]` (the phrase synthesised to a file and played through a MediaPlayer, which takes no audio focus,
-  while listening: speech in without a person), `--es voice stop`,
+  while listening: speech in without a person; `play:<text>` only plays it, to drive push-to-talk or voice mode), `--es voice stop`,
   `--es voice support` (each recogniser's languages and the chosen plan), `--es voice download` (triggers the model
   download where English isn't installed; progress in logcat on API 34). Results
   in `files/voice.txt` and logcat tag `or1-voice`: final text, peak level, partials, error, the recogniser service,
