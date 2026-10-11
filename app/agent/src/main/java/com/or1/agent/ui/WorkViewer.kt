@@ -90,10 +90,10 @@ fun WorkViewer(onClose: () -> Unit, onAsk: () -> Unit) {
             IconCircle(Icons.Close, "Close", onClose, tint = Palette.Text, background = Palette.Surface)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(app ?: "Work screen", style = Type.Label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(app ?: "Agent screen", style = Type.Label, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(if (working) "or1 is working · touch to take over" else "Your turn · tap and type as usual", style = Type.Caption)
             }
-            StatusDot(working)
+            StatusDot(working, Modifier.padding(end = 8.dp))
         }
         Spacer(Modifier.size(12.dp))
         Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -144,14 +144,15 @@ private fun rememberWorkScreenApp(): String? {
     return app
 }
 
+/** Pulses in the accent colour while or1 works; steady green when it's the user's turn. */
 @Composable
-private fun StatusDot(working: Boolean) {
+fun StatusDot(working: Boolean, modifier: Modifier = Modifier) {
     val pulse by rememberInfiniteTransition(label = "pulse").animateFloat(
         initialValue = 0.35f, targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "pulse",
     )
     Box(
-        Modifier.padding(end = 8.dp).size(10.dp).alpha(if (working) pulse else 1f).clip(CircleShape)
+        modifier.size(10.dp).alpha(if (working) pulse else 1f).clip(CircleShape)
             .background(if (working) Palette.Accent else Palette.Success),
     )
 }
@@ -190,6 +191,7 @@ private class WorkSurface(context: Context) : SurfaceView(context), SurfaceHolde
         thread {
             HiddenDisplay.ensure() ?: return@thread
             post { if (holder.surface.isValid) HiddenDisplay.attachViewer(holder.surface) }
+            HiddenDisplay.showHomeIfEmpty()
         }
     }
 

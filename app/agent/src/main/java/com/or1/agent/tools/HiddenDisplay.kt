@@ -604,6 +604,15 @@ object HiddenDisplay {
         }
     }
 
+    /**
+     * A new (or emptied) display has nothing on it, so the viewer would show black: start its app grid. Accessibility
+     * lists a display only once it has windows, so "no app window" covers both.
+     */
+    fun showHomeIfEmpty() {
+        val displayId = id ?: return
+        if (A11yService.instance != null && topAppWindow(displayId) == null) goHome()
+    }
+
     /** Starts [WorkHomeActivity] on the hidden display: its "home screen" (it has no launcher). */
     fun goHome() {
         val target = id ?: return

@@ -223,7 +223,7 @@ fun WorkCard(turn: Turn, active: Boolean, preview: Bitmap?, onOpenPreview: () ->
             Box(Modifier.matchParentSize(), contentAlignment = Alignment.TopEnd) {
                 Image(
                     preview!!.asImageBitmap(),
-                    contentDescription = "Work screen. Tap to view.",
+                    contentDescription = "Agent screen. Tap to view.",
                     contentScale = ContentScale.Crop,
                     alignment = Alignment.TopCenter,
                     modifier = Modifier

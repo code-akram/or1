@@ -96,6 +96,10 @@ a shell pm grant com.google.android.gm android.permission.POST_NOTIFICATIONS    
 restarting adbd. After sign-in GMS updated itself from the Play Store (22.21 to 26.37). One harmless crash seen:
 `com.google.android.gms.ui` asking Settings to enable Bluetooth (`REQUEST_ENABLE`), denied.
 
+Play Protect scans every `adb install` and holds it on a "Send app for a security check?" dialog (the install hangs
+until it's answered). Scanning of ADB installs is off: `settings put global verifier_verify_adb_installs 0`. Don't
+choose "send": that uploads the APK to Google.
+
 ## Register the device, then sign in
 
 The build is uncertified (test-keys, userdebug), so Google blocks sign-in until its GSF ID is registered.

@@ -78,18 +78,11 @@ object AgentHub {
     val showRoutines: StateFlow<Boolean> = _showRoutines
     private val _totalCost = MutableStateFlow(0.0)
     val totalCost: StateFlow<Double> = _totalCost
-    private val _effort = MutableStateFlow("medium")
-    /** Reasoning effort for the next requests: low, medium or high. */
-    val effort: StateFlow<String> = _effort
-    lateinit var model: String
-        private set
 
     private lateinit var appContext: Context
     private lateinit var tools: Tools
     private var agent: Agent? = null
-    private var agentConfig: AgentConfig? = null
     private var routineAgent: Agent? = null
-    private var routineConfig: AgentConfig? = null
     private val routineTranscript by lazy { Transcript(File(appContext.filesDir, ROUTINE_TRANSCRIPTS)) }
     private val client by lazy {
         val key = File(appContext.filesDir, "anthropic-key").takeIf { it.exists() }?.readText()?.trim()
@@ -118,9 +111,6 @@ object AgentHub {
         HiddenDisplay.init(appContext)
         HiddenDisplay.onLeakMoved = { returnToComposer() }
         tools = Tools(appContext)
-        val config = AgentConfig.load(appContext)
-        model = config.model
-        _effort.value = config.effort
         Notifier.init(appContext)
         Lockdown.init(appContext)
         _routineItems.value = loadRoutineRuns()
@@ -149,8 +139,7 @@ object AgentHub {
     private fun agent(): Agent {
         agent?.let { return it }
         val transcript = Transcript(File(appContext.filesDir, "transcripts"))
-        val config = AgentConfig.load(appContext).also { it.effort = _effort.value }
-        return Agent(client, config, tools, hooks, transcript).also { agent = it; agentConfig = config }
+        return Agent(client, AgentConfig.load(appContext), tools, hooks, transcript).also { agent = it }
     }
 
     /** The transcript of the chat in progress, if it has started. */
@@ -159,8 +148,7 @@ object AgentHub {
     /** Routines get their own agent and transcripts (not listed with past chats); each run starts fresh. */
     private fun routineAgent(): Agent {
         routineAgent?.let { return it }
-        val config = AgentConfig.load(appContext).also { it.effort = _effort.value }
-        return Agent(client, config, tools, hooks, routineTranscript).also { routineAgent = it; routineConfig = config }
+        return Agent(client, AgentConfig.load(appContext), tools, hooks, routineTranscript).also { routineAgent = it }
     }
 
     /** Queue a user message. `requestId` makes the reply readable from replies.jsonl (debug driver). */
@@ -319,13 +307,7 @@ object AgentHub {
     fun takeOver() {
         if (!_busy.value) return
         current?.cancel()
-        _items.update { it + ChatItem.Info(ids.incrementAndGet(), "You took over the work screen. Ask or1 when you want it to carry on.") }
-    }
-
-    fun setEffort(level: String) {
-        _effort.value = level
-        agentConfig?.effort = level
-        routineConfig?.effort = level
+        _items.update { it + ChatItem.Info(ids.incrementAndGet(), "You took over the agent screen. Ask or1 when you want it to carry on.") }
     }
 
     /**

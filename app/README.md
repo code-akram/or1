@@ -12,8 +12,8 @@ the chat never leaves the screen.
   title turns into a field; Done, the check or tapping away saves) or deleted with an Undo pill for 4 s (the file
   goes when the pill does; `Dialogs.kt`). Titles the user gives live in `files/chat-titles.json` (a blank one goes back to the
   first message); deleting the chat in progress starts a new one first.
-- `Composer.kt`: a pill when idle; a card while typing with `+` (new chat, show work screen), the model and
-  effort chip, mic (voice is not wired up yet) and the round button (voice placeholder / send / stop). The pill
+- `Composer.kt`: a pill when idle; a card while typing with `+` (new chat, show agent screen), an "Agent screen"
+  chip (opens the work screen viewer; its dot pulses while or1 works), mic (voice is not wired up yet) and the round button (voice placeholder / send / stop). The pill
   and card swap without a fade (AnimatedContent's fade left the re-created native field undrawn).
 - `ComposerInput.kt`: the text field is a native EditText inside the Compose card, with sentence
   auto-capitalisation. A Compose text field cost ~26 ms per keystroke on this phone (recomposition, the IME's
@@ -22,7 +22,7 @@ the chat never leaves the screen.
   frame 53 ms -> 13 ms (release) / 16 ms (debug).
 - `Cards.kt`: one working card per turn (steps, thinking, live thumbnail of the work display), replies in serif.
 - `WorkViewer.kt`: the work display full screen, and usable. Touches are forwarded (scaled to 720x1600); while or1
-  works, the first touch stops it (`AgentHub.takeOver`, with "You took over the work screen…" in the chat). The
+  works, the first touch stops it (`AgentHub.takeOver`, with "You took over the agent screen…" in the chat). The
   header shows the app in front and a status dot (pulsing accent while or1 works). The bottom bar has Back, Apps
   (the work display's home, `WorkHomeActivity`, is an app grid, `AppGrid.kt`; apps open on the same display) and
   "Ask or1" (closes the viewer with the composer open). Its keyboard shows inside it. There's still no moving an app

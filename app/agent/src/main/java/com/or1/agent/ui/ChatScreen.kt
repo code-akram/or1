@@ -80,7 +80,6 @@ fun ChatScreen() {
         val alerts by AgentHub.alerts.collectAsState()
         val busy by AgentHub.busy.collectAsState()
         val totalCost by AgentHub.totalCost.collectAsState()
-        val effort by AgentHub.effort.collectAsState()
         val preview by HiddenDisplay.preview.collectAsState()
         val notificationTick by NotifListener.changes.collectAsState()
         val routines by Routines.list.collectAsState()
@@ -98,6 +97,8 @@ fun ChatScreen() {
                 AgentHub.routinesShown()
             }
         }
+        // The chat's keyboard would stay up over the viewer, covering the work screen.
+        LaunchedEffect(viewerOpen) { if (viewerOpen) input.dismiss() }
         val drawer = rememberDrawerState(DrawerValue.Closed)
         val scope = rememberCoroutineScope()
 
@@ -196,9 +197,6 @@ fun ChatScreen() {
                                 busy = busy,
                                 expanded = expanded,
                                 onExpand = { expanded = it },
-                                model = AgentHub.model,
-                                effort = effort,
-                                onEffort = AgentHub::setEffort,
                                 onSend = { send(input.text) },
                                 onStop = AgentHub::stop,
                                 onPlusAction = {

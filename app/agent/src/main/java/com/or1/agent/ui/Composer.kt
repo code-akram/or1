@@ -41,9 +41,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.or1.agent.tools.HiddenDisplay
@@ -63,9 +60,6 @@ fun Composer(
     busy: Boolean,
     expanded: Boolean,
     onExpand: (Boolean) -> Unit,
-    model: String,
-    effort: String,
-    onEffort: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     onPlusAction: (PlusAction) -> Unit,
@@ -116,7 +110,7 @@ fun Composer(
                 PrimaryButton(action, onPrimary)
             }
         } else {
-            ComposerCard(input, action, onPrimary, onMic, onExpand, model, effort, onEffort, onSend, onPlusAction)
+            ComposerCard(input, busy, action, onPrimary, onMic, onExpand, onSend, onPlusAction)
         }
     }
 }
@@ -125,13 +119,11 @@ fun Composer(
 @Composable
 private fun ComposerCard(
     input: ComposerInput,
+    busy: Boolean,
     action: PrimaryAction,
     onPrimary: () -> Unit,
     onMic: () -> Unit,
     onExpand: (Boolean) -> Unit,
-    model: String,
-    effort: String,
-    onEffort: (String) -> Unit,
     onSend: () -> Unit,
     onPlusAction: (PlusAction) -> Unit,
 ) {
@@ -179,7 +171,7 @@ private fun ComposerCard(
         Spacer(Modifier.height(14.dp))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             PlusButton(onPlusAction, background = Palette.SurfaceHigh)
-            ModelChip(model, effort, onEffort)
+            AgentScreenChip(busy) { onPlusAction(PlusAction.WORK_SCREEN) }
             Spacer(Modifier.weight(1f))
             IconCircle(Icons.Mic, "Voice input", onMic, tint = Palette.TextDim, background = Palette.SurfaceHigh)
             PrimaryButton(action, onPrimary)
@@ -201,7 +193,7 @@ private fun PlusButton(onAction: (PlusAction) -> Unit, background: Color) {
                 onClick = { open = false; onAction(PlusAction.NEW_CHAT) },
             )
             DropdownMenuItem(
-                text = { Text("Show work screen", style = Type.Body) },
+                text = { Text("Show agent screen", style = Type.Body) },
                 leadingIcon = { Icon(Icons.Screen, null, tint = Palette.TextDim, modifier = Modifier.size(20.dp)) },
                 onClick = { open = false; onAction(PlusAction.WORK_SCREEN) },
             )
@@ -209,48 +201,26 @@ private fun PlusButton(onAction: (PlusAction) -> Unit, background: Color) {
     }
 }
 
-/** "Haiku 5.5 Medium": tap to pick the reasoning effort. */
+/** Opens the agent's work screen; its dot pulses while or1 is working there. */
 @Composable
-private fun ModelChip(model: String, effort: String, onEffort: (String) -> Unit) {
-    var open by remember { mutableStateOf(false) }
-    Box {
-        Row(
-            Modifier
-                .height(44.dp)
-                .clip(CircleShape)
-                .background(Palette.SurfaceHigh)
-                .clickable { open = true }
-                .padding(horizontal = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                buildAnnotatedString {
-                    append(modelName(model))
-                    withStyle(SpanStyle(color = Palette.TextDim)) { append(" " + effort.replaceFirstChar { it.uppercase() }) }
-                },
-                style = Type.Chip,
-            )
-        }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = Palette.SurfaceHigh) {
-            for (level in listOf("low", "medium", "high")) {
-                DropdownMenuItem(
-                    text = { Text(level.replaceFirstChar { it.uppercase() }, style = Type.Body) },
-                    trailingIcon = {
-                        if (level == effort) Icon(Icons.Check, null, tint = Palette.Text, modifier = Modifier.size(18.dp))
-                    },
-                    onClick = { open = false; onEffort(level) },
-                )
-            }
+private fun AgentScreenChip(busy: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .height(44.dp)
+            .clip(CircleShape)
+            .background(Palette.SurfaceHigh)
+            .clickable(onClickLabel = "Show agent screen", onClick = onClick)
+            .padding(start = 14.dp, end = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Screen, null, tint = Palette.TextDim, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text("Agent screen", style = Type.Chip)
+        if (busy) {
+            Spacer(Modifier.width(8.dp))
+            StatusDot(working = true)
         }
     }
-}
-
-/** claude-haiku-5-5 -> "Haiku 5.5". */
-fun modelName(id: String): String {
-    val parts = id.removePrefix("claude-").split("-")
-    val family = parts.firstOrNull()?.replaceFirstChar { it.uppercase() } ?: id
-    val version = parts.drop(1).joinToString(".")
-    return if (version.isEmpty()) family else "$family $version"
 }
 
 @Composable
