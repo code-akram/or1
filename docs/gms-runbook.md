@@ -79,6 +79,23 @@ Google's default runtime permission grants (`default-permissions-google.xml`) ar
 fingerprint change; this flash keeps the fingerprint, so they may not be applied (not verified). If GMS lacks e.g.
 location, grant it with `pm grant`.
 
+**Result (2026-10-11):** boot, packages and HOME as above, no privapp warnings. The default grants were indeed not
+applied (GMS had location, accounts, contacts and notifications denied), so they were granted by hand:
+
+```sh
+for pkg in com.google.android.gms com.google.android.gsf com.android.vending; do
+  for perm in ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION ACCESS_BACKGROUND_LOCATION READ_CONTACTS WRITE_CONTACTS \
+      GET_ACCOUNTS READ_PHONE_STATE POST_NOTIFICATIONS READ_CALENDAR WRITE_CALENDAR; do
+    a shell pm grant $pkg android.permission.$perm 2>/dev/null
+  done
+done
+a shell pm grant com.google.android.gm android.permission.POST_NOTIFICATIONS        # and for YouTube
+```
+
+`content query` on gservices is denied to the shell; `su 0 sqlite3 …/gservices.db` (phh-su) reads the ID without
+restarting adbd. After sign-in GMS updated itself from the Play Store (22.21 to 26.37). One harmless crash seen:
+`com.google.android.gms.ui` asking Settings to enable Bluetooth (`REQUEST_ENABLE`), denied.
+
 ## Register the device, then sign in
 
 The build is uncertified (test-keys, userdebug), so Google blocks sign-in until its GSF ID is registered.
