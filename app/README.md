@@ -17,10 +17,32 @@ the chat never leaves the screen.
   title turns into a field; Done, the check or tapping away saves) or deleted with an Undo pill for 4 s (the file
   goes when the pill does; `Dialogs.kt`). Titles the user gives live in `files/chat-titles.json` (a blank one goes back to the
   first message); deleting the chat in progress starts a new one first.
-- `Composer.kt`: a pill when idle; a card while typing with `+` (new chat, show agent screen, chats and routines:
-  the drawer without the edge swipe), an "Agent screen" chip (opens the work screen viewer; its icon marches while
-  or1 works), mic (voice is not wired up yet) and the round button (voice placeholder / send / stop). The pill
-  and card swap without a fade (AnimatedContent's fade left the re-created native field undrawn).
+- `Composer.kt`: a pill when idle; a card while typing with `+` (new chat, show agent screen, voice mode, chats and
+  routines: the drawer without the edge swipe), an "Agent screen" chip (opens the work screen viewer; its icon marches
+  while or1 works), mic and the round button (push-to-talk / send / stop). The pill and card swap without a fade
+  (AnimatedContent's fade left the re-created native field undrawn). Voice:
+  - Round button, nothing typed: **push-to-talk**. Listening starts on touch-down (the first word isn't lost); hold and
+    release sends the final text; slide up 56 dp opens voice mode carrying on with the utterance; slide left cancels.
+    Under 400 ms is a tap: "Hold to talk" for 1.2 s. While or1 works it's Stop; holding it stops or1, then listens.
+    It reads raw MotionEvents (`pointerInteropFilter`): this digitiser cancels touches that are still down, and a
+    cancel followed by a new down within 600 ms continues the same press (no new down: a lift at the cancel).
+    Accessibility services get a plain click (opens voice mode).
+  - While listening the level meter (`LevelMeter` in `Blocks.kt`: 9 columns of 4 dp blocks, newest sample in the middle,
+    stepped every 100 ms in the draw phase, `live`) replaces the placeholder (pill) or the chip (card), with the words
+    so far, the slide hints, or why words can't come out yet (one quiet line).
+  - Mic: dictation into the field (partials stream into the EditText, tap again to finish, never sends; the keyboard
+    isn't opened for it).
+- `VoiceMode.kt`: hands-free voice mode over the chat (the rail stays): listen → `AgentHub.submit` → speak the reply →
+  listen again, until Stop (72 dp; also stops or1 if it's working) or 8 s without words (silence, no match, no
+  recogniser), then back to the chat. Shows the last thing said (small, text2), the reply in Spoken 24/32 with only the
+  sentence being spoken (text) and the one before (text2), stepped per sentence from `SpeechOutput.progress`; the meter
+  `live` listening, `ember` speaking (TTS envelope), the march while working. A tap anywhere interrupts speech and
+  listens (while listening: finishes the utterance). Keeps the screen on; coarse semantics on the changing text. What's
+  spoken is `spokenSummary(turn)`: the reply prose, after "Done. <label>." for each effect the reply doesn't already
+  mention (irreversible ones always, ", irreversible"); without a reply, the turn's last note. The drawer's "Speak
+  replies" switch (`VoicePrefs`, shared prefs `ui`, off by default) also speaks chat replies to requests made by voice
+  (push-to-talk, or dictated then sent). Hosted by one `VoiceModeHost(open, onClose)` call in `ChatScreen`; Back and
+  the `or1` home button close it.
 - `ComposerInput.kt`: the text field is a native EditText inside the Compose card, with sentence
   auto-capitalisation. A Compose text field cost ~26 ms per keystroke on this phone (recomposition, the IME's
   cursor-anchor computation, and Compose re-diffing the semantics tree, since the agent's accessibility service is
@@ -184,17 +206,26 @@ emit only on change (the UI ticks countdowns itself from the end times):
 Behind `SpeechInput`/`SpeechOutput`, from `VoiceEngines.input(context)`/`.output(context)` (swap the factories for
 ElevenLabs).
 - `AndroidSpeechInput`: `SpeechRecognizer` (the default service here is Google's `GoogleTTSRecognitionService`),
-  `EXTRA_PREFER_OFFLINE`, partial results; on the main thread as the API requires. State idle → listening → processing →
+  `EXTRA_PREFER_OFFLINE`, partial results; on the main thread as the API requires. The language is explicit
+  (`EXTRA_LANGUAGE`: the device locale if it's English, and en-US). On API 33 the default recogniser and the on-device
+  one (`createOnDeviceSpeechRecognizer`, when `isOnDeviceRecognitionAvailable`) are asked `checkRecognitionSupport`
+  (installed / downloading / downloadable / online languages); the best plan wins (`VoiceLanguages`), and when English
+  is supported but not installed `triggerModelDownload` is called (at most every 10 min per recogniser). A runtime
+  "language unavailable" (errors 12/13) tries the other recogniser, then triggers the download. When words can't come
+  out (no service, no language) `start` runs an `AudioRecord` level meter and the state stays listening with an
+  `UNAVAILABLE` error carrying the reason ("Voice input isn't ready yet — downloading English") until `stop`. State idle → listening → processing →
   idle with `result`, or error (`VoiceError`: no match, timeout, network, unavailable, permission, busy). A no-match or
   timeout after partial results keeps the partial text. `level` is `onRmsChanged` scaled to 0..1, smoothed and paced to
-  10 Hz (`LevelMeter`). Without a recognition service, `start` runs an `AudioRecord` level meter and reports
-  "unavailable".
+  10 Hz (`LevelMeter`).
 - `AndroidSpeechOutput`: `TextToSpeech` (Google's engine), the reply split into sentences (`Sentences.split`: markdown
   out, abbreviations, initials and decimals kept, long ones cut at a comma) and queued one utterance each; `progress`
   carries the reply id, its sentences and the one being spoken. `level` is a synthetic envelope pulsed on word
   boundaries (`onRangeStart`), with a gentle wobble if the engine sends none, sampled at 10 Hz while speaking only.
+- Transient audio focus (`AudioFocus`, usage assistant) while listening or speaking, released after.
 - `<queries>` for `RecognitionService` and `TTS_SERVICE` in the manifest (targetSdk 33 package visibility).
-- Debug: `--es voice speak:<text>`, `--es voice listen` (one utterance; up to 20 s, then stop), `--es voice stop`. Results
+- Debug: `--es voice speak:<text>`, `--es voice listen` (one utterance; up to 20 s, then stop), `--es voice stop`,
+  `--es voice support` (each recogniser's languages and the chosen plan), `--es voice download` (triggers the model
+  download where English isn't installed; progress in logcat on API 34). Results
   in `files/voice.txt` and logcat tag `or1-voice`: final text, peak level, partials, error, the recogniser service,
   on-device availability and whether the network was up; for speak, sentences spoken, word boundaries and peak level.
 

@@ -4,19 +4,27 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.speech.ModelDownloadListener
 import android.speech.RecognitionListener
+import android.speech.RecognitionSupport
+import android.speech.RecognitionSupportCallback
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
+import java.util.EnumMap
+import java.util.Locale
 import kotlin.concurrent.thread
 import kotlin.math.exp
 import kotlin.math.sin
@@ -116,15 +124,94 @@ object VoiceEngines {
 
 // --- Android SpeechRecognizer -----------------------------------------------------------------------------------------
 
+/** Which recogniser: the default `voice_recognition_service`, or the system's on-device one. */
+enum class RecognizerRoute { DEFAULT, ON_DEVICE }
+
+/** What a recogniser says about its languages (`checkRecognitionSupport`, API 33); [error] is set when it can't say. */
+data class LanguageSupport(
+    val installed: List<String> = emptyList(),
+    val pending: List<String> = emptyList(),
+    val supported: List<String> = emptyList(),
+    val online: List<String> = emptyList(),
+    val error: Int? = null,
+) {
+    override fun toString() =
+        if (error != null) "can't check (error $error)" else "installed=$installed pending=$pending supported=$supported online=$online"
+}
+
+/** How to listen for [language] on [route]. */
+data class LanguagePlan(val kind: Kind, val language: String, val route: RecognizerRoute = RecognizerRoute.DEFAULT) {
+    /** In order of preference. */
+    enum class Kind {
+        /** Installed on the device, or recognised online. */
+        READY,
+        /** The recogniser can't say: just try. */
+        UNKNOWN,
+        /** Its model is downloading. */
+        PENDING,
+        /** It could be recognised on the device once its model is downloaded. */
+        DOWNLOAD,
+        /** Not offered at all. */
+        NONE,
+    }
+}
+
+/** Picking the recognition language from what the recognisers report (JVM-tested). */
+object VoiceLanguages {
+    /** The languages to ask for, best first: the device's if it's English, and en-US (or/1 speaks English). */
+    fun candidates(locale: Locale): List<String> {
+        val device = locale.toLanguageTag().takeIf { it.isNotBlank() && it != "und" }
+        return if (device != null && locale.language == "en") listOf(device, "en-US").distinct() else listOfNotNull("en-US", device)
+    }
+
+    /** The first of [candidates] in [languages]: the same tag, else the same language in another region. */
+    fun match(candidates: List<String>, languages: List<String>): String? {
+        val norm = languages.associateBy { it.replace('_', '-').lowercase() }
+        candidates.forEach { c -> norm[c.lowercase()]?.let { return it } }
+        candidates.forEach { c ->
+            val lang = c.substringBefore('-').lowercase()
+            norm.entries.firstOrNull { it.key.substringBefore('-') == lang }?.let { return it.value }
+        }
+        return null
+    }
+
+    fun plan(candidates: List<String>, support: LanguageSupport, route: RecognizerRoute): LanguagePlan {
+        val first = candidates.first()
+        if (support.error != null) return LanguagePlan(LanguagePlan.Kind.UNKNOWN, first, route)
+        match(candidates, support.installed)?.let { return LanguagePlan(LanguagePlan.Kind.READY, it, route) }
+        match(candidates, support.online)?.let { return LanguagePlan(LanguagePlan.Kind.READY, it, route) }
+        match(candidates, support.pending)?.let { return LanguagePlan(LanguagePlan.Kind.PENDING, it, route) }
+        match(candidates, support.supported)?.let { return LanguagePlan(LanguagePlan.Kind.DOWNLOAD, it, route) }
+        return LanguagePlan(LanguagePlan.Kind.NONE, first, route)
+    }
+
+    /** The most usable plan; on a tie, the earlier one (the default recogniser comes first). */
+    fun best(plans: List<LanguagePlan>): LanguagePlan? = plans.minByOrNull { it.kind.ordinal }
+
+    /** "English", for the "downloading English" note. */
+    fun name(tag: String): String = Locale.forLanguageTag(tag).getDisplayLanguage(Locale.ENGLISH).ifBlank { tag }
+
+    fun downloading(tag: String) = "Voice input isn't ready yet — downloading ${name(tag)}"
+    fun missing(tag: String) = "Voice input isn't ready yet — ${name(tag)} isn't installed for speech recognition"
+}
+
 /**
  * [SpeechInput] on Android's [SpeechRecognizer] (here Google's GoogleTTSRecognitionService, the default
  * voice_recognition_service), preferring offline recognition. The recogniser lives on the main thread, as the API
- * requires; every call is posted there. Callbacks of an utterance that was cancelled or replaced are ignored. Without a
- * recognition service, [start] runs an [AudioRecord] level meter and reports UNAVAILABLE.
+ * requires; every call is posted there. Callbacks of an utterance that was cancelled or replaced are ignored.
+ *
+ * The language is explicit ([VoiceLanguages.candidates]). On API 33 each recogniser (the default one and, if there is
+ * one, the on-device one) is asked which languages it has installed, is downloading or could download
+ * (`checkRecognitionSupport`); the best is used, and a model download is triggered when the language is supported
+ * but not installed. If listening still fails with "language unavailable", the other recogniser is tried, then a
+ * download is triggered. Whenever words can't come out (no service, the language missing), [start] runs an
+ * [AudioRecord] level meter instead: [state] is LISTENING with [error] set (UNAVAILABLE, with the reason) until [stop].
  */
 class AndroidSpeechInput(private val context: Context) : SpeechInput {
     private val main = Handler(Looper.getMainLooper())
-    override val available: Boolean by lazy { SpeechRecognizer.isRecognitionAvailable(context) }
+    private val defaultAvailable: Boolean by lazy { SpeechRecognizer.isRecognitionAvailable(context) }
+    private val onDeviceAvailable: Boolean by lazy { runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(context) }.getOrDefault(false) }
+    override val available: Boolean by lazy { defaultAvailable || onDeviceAvailable }
     private val _state = MutableStateFlow(ListenState.IDLE)
     override val state: StateFlow<ListenState> = _state
     private val _partial = MutableStateFlow("")
@@ -136,73 +223,278 @@ class AndroidSpeechInput(private val context: Context) : SpeechInput {
     private val _level = MutableStateFlow(0f)
     override val level: StateFlow<Float> = _level
 
-    private var recognizer: SpeechRecognizer? = null
+    private val recognizers = EnumMap<RecognizerRoute, SpeechRecognizer>(RecognizerRoute::class.java)
     /** The utterance in progress; callbacks carry theirs and are dropped once it moves on. */
     private var session = 0
     private val meter = LevelMeter()
     @Volatile
     private var metering = false
+    /** A plan that worked; until then each [start] asks the recognisers again (a download may have finished). */
+    private var plan: LanguagePlan? = null
+    /** The route and language of the utterance in progress, and the routes it has tried. */
+    private var route = RecognizerRoute.DEFAULT
+    private var language = "en-US"
+    private val tried = mutableSetOf<RecognizerRoute>()
+    /** Between [start] and the plan: a [stop] then ends the utterance before it begins. */
+    private var resolving = false
+    /** When a model download was last triggered, per route: not again within [DOWNLOAD_AGAIN_MS]. */
+    private val downloadAt = EnumMap<RecognizerRoute, Long>(RecognizerRoute::class.java)
+
+    private val routes: List<RecognizerRoute>
+        get() = listOfNotNull(RecognizerRoute.DEFAULT.takeIf { defaultAvailable }, RecognizerRoute.ON_DEVICE.takeIf { onDeviceAvailable })
+
+    private fun candidates() = VoiceLanguages.candidates(Locale.getDefault())
 
     override fun start() = onMain {
         session++
+        // An utterance still being processed is dropped; the recogniser would otherwise be busy.
+        metering = false
+        resolving = false
+        recognizers.values.forEach { runCatching { it.cancel() } }
         _partial.value = ""
         _final.value = null
         _error.value = null
         meter.reset()
         _level.value = 0f
         if (!available) {
-            _error.value = VoiceError(VoiceError.Kind.UNAVAILABLE, "Voice input isn't available yet: there's no speech recognition service.")
-            _state.value = ListenState.LISTENING
-            startMeter()
+            meterOnly(VoiceError(VoiceError.Kind.UNAVAILABLE, "Voice input isn't available yet: there's no speech recognition service."))
             return@onMain
         }
-        val r = recognizer ?: SpeechRecognizer.createSpeechRecognizer(context).also { recognizer = it }
-        r.setRecognitionListener(Listener(session))
-        _state.value = ListenState.LISTENING
-        r.startListening(
-            Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-                .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-                .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-                .putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName),
-        )
+        setState(ListenState.LISTENING)
+        val id = session
+        resolving = true
+        resolvePlan { p ->
+            if (id != session) return@resolvePlan
+            resolving = false
+            begin(p)
+        }
+    }
+
+    private fun begin(p: LanguagePlan) {
+        tried.clear()
+        when (p.kind) {
+            LanguagePlan.Kind.PENDING, LanguagePlan.Kind.DOWNLOAD -> {
+                if (p.kind == LanguagePlan.Kind.DOWNLOAD) triggerDownload(p.route, p.language)
+                meterOnly(VoiceError(VoiceError.Kind.UNAVAILABLE, VoiceLanguages.downloading(p.language)))
+            }
+            // NONE: the recogniser may under-report; a "language unavailable" error is handled when it comes.
+            else -> listen(p.route, p.language)
+        }
+    }
+
+    private fun listen(r: RecognizerRoute, lang: String) {
+        tried += r
+        route = r
+        language = lang
+        val recognizer = recognizer(r)
+        if (recognizer == null) {
+            val next = routes.firstOrNull { it !in tried }
+            if (next != null) listen(next, lang) else meterOnly(VoiceError(VoiceError.Kind.UNAVAILABLE, "Voice input couldn't start."))
+            return
+        }
+        recognizer.setRecognitionListener(Listener(session))
+        Log.i(TAG, "listen: route=$r language=$lang")
+        setState(ListenState.LISTENING)
+        recognizer.startListening(intent(lang))
+    }
+
+    private fun intent(lang: String) = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+        .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+        .putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang)
+        .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+        .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+        .putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
+
+    private fun recognizer(r: RecognizerRoute): SpeechRecognizer? = recognizers[r] ?: runCatching {
+        when (r) {
+            RecognizerRoute.DEFAULT -> SpeechRecognizer.createSpeechRecognizer(context)
+            RecognizerRoute.ON_DEVICE -> SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+        }
+    }.onFailure { Log.w(TAG, "no $r recogniser", it) }.getOrNull()?.also { recognizers[r] = it }
+
+    private fun drop(r: RecognizerRoute) {
+        recognizers.remove(r)?.let { runCatching { it.destroy() } }
     }
 
     override fun stop() = onMain {
+        if (resolving) {
+            resolving = false
+            session++
+            setState(ListenState.IDLE)
+            return@onMain
+        }
         if (metering) {
             metering = false
-            _state.value = ListenState.IDLE
+            setState(ListenState.IDLE)
             return@onMain
         }
         if (_state.value != ListenState.LISTENING) return@onMain
-        _state.value = ListenState.PROCESSING
-        recognizer?.stopListening()
+        setState(ListenState.PROCESSING)
+        recognizers[route]?.stopListening()
     }
 
     override fun cancel() = onMain {
         session++
+        resolving = false
         metering = false
-        recognizer?.cancel()
-        _state.value = ListenState.IDLE
+        recognizers.values.forEach { it.cancel() }
+        setState(ListenState.IDLE)
         _level.value = 0f
     }
 
     override fun release() = onMain {
         cancel()
-        recognizer?.destroy()
-        recognizer = null
+        RecognizerRoute.entries.forEach(::drop)
     }
 
     private fun onMain(block: () -> Unit) {
         if (Looper.myLooper() == Looper.getMainLooper()) block() else main.post(block)
     }
 
+    /** Holds audio focus while listening (so media pauses), releases it after. */
+    private fun setState(s: ListenState) {
+        _state.value = s
+        if (s == ListenState.LISTENING || s == ListenState.PROCESSING) AudioFocus.hold(context, "listen") else AudioFocus.drop(context, "listen")
+    }
+
+    // --- Languages ---
+
+    /** The plan for the next utterance: the one that last worked, or the best the recognisers report now. */
+    private fun resolvePlan(onPlan: (LanguagePlan) -> Unit) {
+        plan?.let { return onPlan(it) }
+        val candidates = candidates()
+        if (Build.VERSION.SDK_INT < 33) return onPlan(LanguagePlan(LanguagePlan.Kind.UNKNOWN, candidates.first(), routes.first()))
+        probeAll { results ->
+            val plans = results.map { (r, support) -> VoiceLanguages.plan(candidates, support, r) }
+            val best = VoiceLanguages.best(plans) ?: LanguagePlan(LanguagePlan.Kind.UNKNOWN, candidates.first(), routes.first())
+            Log.i(TAG, "plan: $best of $plans")
+            if (best.kind == LanguagePlan.Kind.READY) plan = best
+            onPlan(best)
+        }
+    }
+
+    /** Each route's [LanguageSupport], in route order (API 33; before that, "can't check"). */
+    private fun probeAll(onDone: (List<Pair<RecognizerRoute, LanguageSupport>>) -> Unit) {
+        val out = mutableListOf<Pair<RecognizerRoute, LanguageSupport>>()
+        fun next(i: Int) {
+            if (i >= routes.size) return onDone(out)
+            probe(routes[i]) { support ->
+                Log.i(TAG, "support ${routes[i]}: $support")
+                out += routes[i] to support
+                next(i + 1)
+            }
+        }
+        next(0)
+    }
+
+    private fun probe(r: RecognizerRoute, onSupport: (LanguageSupport) -> Unit) {
+        if (Build.VERSION.SDK_INT < 33) return onSupport(LanguageSupport(error = -1))
+        val recognizer = recognizer(r) ?: return onSupport(LanguageSupport(error = -1))
+        var done = false
+        lateinit var timeout: Runnable
+        val finish = { s: LanguageSupport ->
+            if (!done) {
+                done = true
+                main.removeCallbacks(timeout)
+                onSupport(s)
+            }
+        }
+        // A service that never answers.
+        timeout = Runnable { finish(LanguageSupport(error = -2)) }
+        main.postDelayed(timeout, PROBE_TIMEOUT_MS)
+        try {
+            // Some versions want a listener before they connect.
+            recognizer.setRecognitionListener(Listener(-1))
+            recognizer.checkRecognitionSupport(intent(candidates().first()), context.mainExecutor, object : RecognitionSupportCallback {
+                override fun onSupportResult(s: RecognitionSupport) = finish(
+                    LanguageSupport(s.installedOnDeviceLanguages, s.pendingOnDeviceLanguages, s.supportedOnDeviceLanguages, s.onlineLanguages),
+                )
+
+                override fun onError(error: Int) = finish(LanguageSupport(error = error))
+            })
+        } catch (e: Exception) {
+            Log.w(TAG, "checkRecognitionSupport on $r failed", e)
+            finish(LanguageSupport(error = -3))
+        }
+    }
+
+    /** Asks [r] to download [lang]'s model (API 33); false if it can't be asked. */
+    private fun triggerDownload(r: RecognizerRoute, lang: String, force: Boolean = false): Boolean {
+        if (Build.VERSION.SDK_INT < 33) return false
+        val now = SystemClock.elapsedRealtime()
+        val last = downloadAt[r]
+        if (!force && last != null && now - last < DOWNLOAD_AGAIN_MS) return true
+        val recognizer = recognizer(r) ?: return false
+        return try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                recognizer.triggerModelDownload(intent(lang), context.mainExecutor, object : ModelDownloadListener {
+                    override fun onProgress(completedPercent: Int) {
+                        Log.i(TAG, "download $r $lang: $completedPercent%")
+                    }
+
+                    override fun onSuccess() {
+                        Log.i(TAG, "download $r $lang: done")
+                        plan = null
+                    }
+
+                    override fun onScheduled() {
+                        Log.i(TAG, "download $r $lang: scheduled")
+                    }
+
+                    override fun onError(error: Int) {
+                        Log.w(TAG, "download $r $lang: error $error")
+                    }
+                })
+            } else {
+                recognizer.triggerModelDownload(intent(lang))
+            }
+            downloadAt[r] = now
+            Log.i(TAG, "download $r $lang: triggered")
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "triggerModelDownload on $r failed", e)
+            false
+        }
+    }
+
+    /** Debug (`--es voice support`): what each recogniser reports, and the plan. Calls back on the main thread. */
+    fun support(onReport: (String) -> Unit) = onMain {
+        val candidates = candidates()
+        val head = "api=${Build.VERSION.SDK_INT} locale=${Locale.getDefault().toLanguageTag()} candidates=$candidates " +
+            "default=$defaultAvailable on_device=$onDeviceAvailable service=" +
+            android.provider.Settings.Secure.getString(context.contentResolver, "voice_recognition_service")
+        probeAll { results ->
+            val plans = results.map { (r, s) -> VoiceLanguages.plan(candidates, s, r) }
+            onReport(
+                head + "\n" + results.joinToString("\n") { (r, s) -> "$r: $s" } +
+                    "\nplans: $plans\nchosen: ${VoiceLanguages.best(plans)}\nworking plan: $plan",
+            )
+        }
+    }
+
+    /**
+     * Debug (`--es voice download`): triggers the model download on every route whose plan isn't READY (on all of them
+     * if they can't say), and reports what was asked. Progress (API 34) goes to logcat.
+     */
+    fun download(onReport: (String) -> Unit) = onMain {
+        val candidates = candidates()
+        probeAll { results ->
+            val lines = results.map { (r, s) ->
+                val p = VoiceLanguages.plan(candidates, s, r)
+                val asked = if (p.kind == LanguagePlan.Kind.READY) "already ready" else "triggered=${triggerDownload(r, p.language, force = true)}"
+                "$r ${p.kind} ${p.language}: $asked ($s)"
+            }
+            plan = null
+            onReport(lines.joinToString("\n").ifEmpty { "no recogniser" })
+        }
+    }
+
     private inner class Listener(private val id: Int) : RecognitionListener {
         private val live get() = id == session
 
         override fun onReadyForSpeech(params: Bundle?) {
-            if (live && _state.value != ListenState.PROCESSING) _state.value = ListenState.LISTENING
+            if (live && _state.value != ListenState.PROCESSING) setState(ListenState.LISTENING)
         }
 
         override fun onBeginningOfSpeech() = Unit
@@ -216,7 +508,7 @@ class AndroidSpeechInput(private val context: Context) : SpeechInput {
 
         override fun onEndOfSpeech() {
             if (!live) return
-            _state.value = ListenState.PROCESSING
+            setState(ListenState.PROCESSING)
             _level.value = 0f
         }
 
@@ -229,12 +521,14 @@ class AndroidSpeechInput(private val context: Context) : SpeechInput {
             if (!live) return
             session++ // Done: a late error from this utterance is ignored.
             _level.value = 0f
+            // This route and language work: no need to ask again.
+            if (plan == null) plan = LanguagePlan(LanguagePlan.Kind.READY, language, route).also { Log.i(TAG, "working plan: $it") }
             val text = first(results) ?: _partial.value.ifBlank { null }
             if (text == null) {
                 fail(VoiceError(VoiceError.Kind.NO_MATCH, "Didn't catch that."))
             } else {
                 _final.value = text
-                _state.value = ListenState.IDLE
+                setState(ListenState.IDLE)
             }
         }
 
@@ -242,19 +536,21 @@ class AndroidSpeechInput(private val context: Context) : SpeechInput {
             if (!live) return
             session++
             _level.value = 0f
+            Log.i(TAG, "recogniser $route ($language) error $error")
+            if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED || error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE) {
+                languageMissing()
+                return
+            }
             val e = VoiceLevels.error(error)
             // Some recognisers end with no-match after partial results: keep what was heard.
             val heard = _partial.value.ifBlank { null }
             if (heard != null && (e.kind == VoiceError.Kind.NO_MATCH || e.kind == VoiceError.Kind.TIMEOUT)) {
                 _final.value = heard
-                _state.value = ListenState.IDLE
+                setState(ListenState.IDLE)
                 return
             }
             // A busy or broken recogniser is made afresh next time.
-            if (e.kind == VoiceError.Kind.BUSY || e.kind == VoiceError.Kind.OTHER) {
-                recognizer?.destroy()
-                recognizer = null
-            }
+            if (e.kind == VoiceError.Kind.BUSY || e.kind == VoiceError.Kind.OTHER) drop(route)
             fail(e)
         }
 
@@ -264,10 +560,31 @@ class AndroidSpeechInput(private val context: Context) : SpeechInput {
             bundle?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim()?.ifBlank { null }
     }
 
+    /** "Language unavailable": the other recogniser, else a download and the level meter with the reason. */
+    private fun languageMissing() {
+        plan = null
+        val next = routes.firstOrNull { it !in tried }
+        if (next != null) {
+            Log.i(TAG, "$route has no $language: trying $next")
+            listen(next, language)
+            return
+        }
+        val downloading = tried.toList().map { triggerDownload(it, language) }.any { it }
+        meterOnly(VoiceError(VoiceError.Kind.UNAVAILABLE, if (downloading) VoiceLanguages.downloading(language) else VoiceLanguages.missing(language)))
+    }
+
     private fun fail(e: VoiceError) {
         Log.i(TAG, "listen: ${e.kind} ${e.message}")
         _error.value = e
-        _state.value = ListenState.ERROR
+        setState(ListenState.ERROR)
+    }
+
+    /** Words can't come out: say why ([error]) and still show that the mic hears, until [stop]. */
+    private fun meterOnly(e: VoiceError) {
+        Log.i(TAG, "level meter only: ${e.message}")
+        _error.value = e
+        setState(ListenState.LISTENING)
+        startMeter()
     }
 
     /** No recogniser: still show that the mic hears, from the microphone's RMS every 100 ms. */
@@ -301,7 +618,7 @@ class AndroidSpeechInput(private val context: Context) : SpeechInput {
                 recorder.stop()
                 recorder.release()
                 _level.value = 0f
-                if (id == session && _state.value == ListenState.LISTENING) _state.value = ListenState.IDLE
+                main.post { if (id == session && _state.value == ListenState.LISTENING) setState(ListenState.IDLE) }
                 metering = false
             }
         }
@@ -309,6 +626,37 @@ class AndroidSpeechInput(private val context: Context) : SpeechInput {
 
     private companion object {
         const val TAG = "or1-voice"
+        const val PROBE_TIMEOUT_MS = 3_000L
+        const val DOWNLOAD_AGAIN_MS = 10 * 60_000L
+    }
+}
+
+/**
+ * Transient audio focus while or1 listens or speaks (media pauses), released when neither is: one request shared by
+ * both, held while anyone holds it.
+ */
+object AudioFocus {
+    private val holders = mutableSetOf<String>()
+    private var request: AudioFocusRequest? = null
+
+    @Synchronized
+    fun hold(context: Context, who: String) {
+        if (!holders.add(who) || holders.size > 1) return
+        val am = context.getSystemService(AudioManager::class.java) ?: return
+        val r = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            .setOnAudioFocusChangeListener { }
+            .build()
+        request = r
+        runCatching { am.requestAudioFocus(r) }.onFailure { Log.w("or1-voice", "audio focus", it) }
+    }
+
+    @Synchronized
+    fun drop(context: Context, who: String) {
+        if (!holders.remove(who) || holders.isNotEmpty()) return
+        val r = request ?: return
+        request = null
+        runCatching { context.getSystemService(AudioManager::class.java)?.abandonAudioFocusRequest(r) }
     }
 }
 
@@ -318,9 +666,10 @@ class AndroidSpeechInput(private val context: Context) : SpeechInput {
  * [SpeechOutput] on Android's [TextToSpeech] (Google's engine when installed). A reply is split into sentences
  * ([Sentences.split]) and queued one utterance each, so [SpeechProgress.index] follows the voice. The level is a
  * synthetic envelope ([WordEnvelope]) pulsed on word boundaries (`onRangeStart`), sampled every 100 ms while speaking
- * only.
+ * only. Holds transient audio focus ([AudioFocus]) while speaking.
  */
 class AndroidSpeechOutput(context: Context) : SpeechOutput {
+    private val appContext = context.applicationContext
     private val _available = MutableStateFlow(false)
     override val available: StateFlow<Boolean> = _available
     private val _progress = MutableStateFlow(SpeechProgress())
@@ -371,6 +720,7 @@ class AndroidSpeechOutput(context: Context) : SpeechOutput {
             if (!ready) {
                 pending = text to id
                 _progress.value = SpeechProgress(id, Sentences.split(text), -1, speaking = true)
+                AudioFocus.hold(appContext, "speak")
                 return
             }
             enqueue(text, id)
@@ -384,9 +734,11 @@ class AndroidSpeechOutput(context: Context) : SpeechOutput {
         if (sentences.isEmpty()) {
             tts.stop()
             _progress.value = SpeechProgress(id, emptyList(), -1, speaking = false)
+            AudioFocus.drop(appContext, "speak")
             return
         }
         _progress.value = SpeechProgress(id, sentences, -1, speaking = true)
+        AudioFocus.hold(appContext, "speak")
         sentences.forEachIndexed { i, sentence ->
             tts.speak(sentence, if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "$s#$i")
         }
@@ -412,6 +764,7 @@ class AndroidSpeechOutput(context: Context) : SpeechOutput {
         ticker = null
         _progress.value = _progress.value.copy(speaking = false)
         _level.value = 0f
+        AudioFocus.drop(appContext, "speak")
     }
 
     /** (session, sentence) of an utterance id, or null if it belongs to an older [speak]. */

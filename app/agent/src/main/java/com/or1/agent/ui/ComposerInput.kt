@@ -42,7 +42,19 @@ class ComposerInput {
 
     fun clear() {
         kept = ""
-        view?.text?.clear()
+        view?.text?.clear() ?: run { hasText = false }
+    }
+
+    /** Replaces the text, caret at the end (dictation streams into the field this way). */
+    fun setText(text: String) {
+        kept = text
+        val v = view
+        if (v == null) {
+            hasText = text.isNotBlank()
+            return
+        }
+        v.setText(text)
+        v.setSelection(text.length)
     }
 
     /** Focuses the field and opens the keyboard (once the view is attached, or the request is dropped). */
