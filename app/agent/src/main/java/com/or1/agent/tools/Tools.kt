@@ -3,19 +3,25 @@ package com.or1.agent.tools
 import android.content.Context
 import org.json.JSONObject
 
-/** A tool result: text, optionally with a screenshot (base64 JPEG). */
-data class ToolOutput(val text: String, val jpegBase64: String? = null)
+/**
+ * A tool result: text, optionally with a screenshot (base64 JPEG). `undo` is how to reverse what a write did, for the
+ * effects log ([com.or1.agent.Effects], [com.or1.agent.Undo]); it never goes to the model. Null when nothing changed.
+ */
+data class ToolOutput(val text: String, val jpegBase64: String? = null, val undo: JSONObject? = null)
 
 /** Dispatches tool calls to their implementations. Schemas live in assets/agent.json. */
 class Tools(context: Context) {
-    private val system = SystemTools(context)
+    internal val system = SystemTools(context)
     private val screen = ScreenTools(context)
     private val shell = ShellTool()
     private val memory = MemoryTool(context)
-    private val calendar = CalendarTool(context)
-    private val contacts = ContactsTool(context)
+    internal val calendar = CalendarTool(context)
+    internal val contacts = ContactsTool(context)
 
     fun elementLabel(id: Int): String = screen.labelOf(id)
+
+    /** The class of element [id] from the last screen read ("Switch", "Button"), if known. */
+    fun elementKind(id: Int): String? = screen.kindOf(id)
 
     /** One-line technical summary of a call (tool and arguments), shown under the plain-language label. */
     fun describe(name: String, args: JSONObject): String {
@@ -30,15 +36,15 @@ class Tools(context: Context) {
         "screen" -> screen.screen(args.optBoolean("screenshot"))
         "act" -> screen.act(args)
         "open" -> system.open(args, screen)
-        "device" -> ToolOutput(if (args.optString("action") == "get") system.deviceGet() else system.deviceSet(args))
-        "clock" -> ToolOutput(system.clock(args))
+        "device" -> if (args.optString("action") == "get") ToolOutput(system.deviceGet()) else system.deviceSet(args)
+        "clock" -> system.clock(args)
         "notifications" -> ToolOutput(system.notifications())
         "apps" -> ToolOutput(system.apps(args))
         "shell" -> ToolOutput(shell.run(args.getString("command")))
-        "memory" -> ToolOutput(memory.run(args))
-        "calendar" -> ToolOutput(calendar.run(args))
-        "contacts" -> ToolOutput(contacts.run(args))
-        "routines" -> ToolOutput(com.or1.agent.Routines.tool(args))
+        "memory" -> memory.run(args)
+        "calendar" -> calendar.run(args)
+        "contacts" -> contacts.run(args)
+        "routines" -> com.or1.agent.Routines.tool(args)
         else -> throw IllegalArgumentException("Unknown tool '$name'.")
     }
 }

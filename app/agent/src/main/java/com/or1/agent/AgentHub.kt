@@ -6,6 +6,8 @@ import android.util.Log
 import com.anthropic.client.okhttp.AnthropicOkHttpClient
 import com.anthropic.errors.AnthropicServiceException
 import com.or1.agent.tools.HiddenDisplay
+import com.or1.agent.tools.MemoryNotes
+import com.or1.agent.tools.ToolOutput
 import com.or1.agent.tools.Tools
 import com.or1.agent.ui.StepLabels
 import java.io.File
@@ -16,7 +18,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -38,6 +43,11 @@ sealed interface ChatItem {
     data class Info(override val id: Long, val text: String) : ChatItem
     /** The reply as it streams in; replaced by the [Reply] when it's complete, dropped if the model calls a tool. */
     data class Draft(override val id: Long, val text: String) : ChatItem
+    /**
+     * A side effect of the [ToolCall] just before it (a receipt row). Replaced with the latest [effect] whenever its
+     * undo state changes, so the row can render from it alone.
+     */
+    data class Effect(override val id: Long, val effect: com.or1.agent.Effect) : ChatItem
 }
 
 /** Shown at the top of the chat: with the system UI locked down (see [Lockdown]), this is how routines reach the user. */
@@ -78,6 +88,14 @@ object AgentHub {
     val showRoutines: StateFlow<Boolean> = _showRoutines
     private val _totalCost = MutableStateFlow(0.0)
     val totalCost: StateFlow<Double> = _totalCost
+    /**
+     * Side effects of the chat and routine runs, newest first, from files/activity.jsonl (the last 30 days; eval
+     * requests left out). For the Today tab: `effects.value.today()`.
+     */
+    val effects: StateFlow<List<Effect>> = ActivityLog.effects.map { list -> list.filter { it.source != "eval" } }
+        .stateIn(scope, SharingStarted.Eagerly, emptyList())
+    /** What or1 knows: the memory notes, in the order (and with the indexes) the memory tool uses. */
+    val memoryNotes: StateFlow<List<String>> = MemoryNotes.notes
 
     private lateinit var appContext: Context
     private lateinit var tools: Tools
@@ -103,6 +121,12 @@ object AgentHub {
     /** The [ChatItem.Draft] the current response is streaming into, if any. */
     @Volatile
     private var draftId: Long? = null
+    /** Who the current request's effects belong to: (source, source id, source label); see [Effect]. */
+    @Volatile
+    private var effectSource = Triple<String, String?, String?>("chat", null, null)
+    /** Read before an `act` tap runs (the screen changes after it): what it tapped, for [Effects.classify]. */
+    @Volatile
+    private var tapFacts: CallFacts? = null
 
     @Synchronized
     fun init(context: Context) {
@@ -110,6 +134,9 @@ object AgentHub {
         appContext = context.applicationContext
         HiddenDisplay.init(appContext)
         HiddenDisplay.onLeakMoved = { returnToComposer() }
+        ActivityLog.init(appContext.filesDir)
+        ActivityLog.onChange = ::effectChanged
+        MemoryNotes.init(appContext.filesDir)
         tools = Tools(appContext)
         Notifier.init(appContext)
         Lockdown.init(appContext)
@@ -151,31 +178,43 @@ object AgentHub {
         return Agent(client, AgentConfig.load(appContext), tools, hooks, routineTranscript).also { routineAgent = it }
     }
 
-    /** Queue a user message. `requestId` makes the reply readable from replies.jsonl (debug driver). */
-    fun submit(text: String, requestId: String? = null, fresh: Boolean = false) {
+    /**
+     * Queue a user message. `requestId` makes the reply readable from replies.jsonl (debug driver). `context` goes to
+     * the model after the text but isn't shown in the chat (an undo's receipt); `done` gets whether the request failed
+     * or was stopped.
+     */
+    fun submit(text: String, requestId: String? = null, fresh: Boolean = false, context: String? = null, done: ((Boolean) -> Unit)? = null) {
         if (_routineBusy.value) _items.update { it + ChatItem.Info(ids.incrementAndGet(), "A routine is running. Your request starts when it's done.") }
         scope.launch {
-            lock.withLock {
-                // Set once it runs, not when queued, so Stop cancels the request in progress.
-                current = coroutineContext[Job]
-                // Eval requests (requestId) share one transcript, so they don't flood the drawer's past chats.
-                if (fresh) newConversation(newTranscript = requestId == null)
-                val idle = lastChatEnd > 0 && System.currentTimeMillis() - lastChatEnd > AUTO_NEW_CHAT_MS
-                logGap(if (requestId != null) "eval" else "chat", autoNewChat = idle && !fresh)
-                if (idle && !fresh) {
-                    newConversation()
-                    add(ChatItem.Info(ids.incrementAndGet(), "New chat: the last message was over an hour ago. The earlier one is in the menu."))
+            var ok = false
+            try {
+                lock.withLock {
+                    // Set once it runs, not when queued, so Stop cancels the request in progress.
+                    current = coroutineContext[Job]
+                    // Eval requests (requestId) share one transcript, so they don't flood the drawer's past chats.
+                    if (fresh) newConversation(newTranscript = requestId == null)
+                    val idle = lastChatEnd > 0 && System.currentTimeMillis() - lastChatEnd > AUTO_NEW_CHAT_MS
+                    logGap(if (requestId != null) "eval" else "chat", autoNewChat = idle && !fresh)
+                    if (idle && !fresh) {
+                        newConversation()
+                        add(ChatItem.Info(ids.incrementAndGet(), "New chat: the last message was over an hour ago. The earlier one is in the menu."))
+                    }
+                    add(ChatItem.User(ids.incrementAndGet(), text))
+                    val a = agent()
+                    effectSource = Triple(if (requestId != null) "eval" else "chat", a.transcriptFile.nameWithoutExtension, null)
+                    val outcome = try {
+                        run(if (context != null) "$text\n\n$context" else text, a, _busy)
+                    } finally {
+                        lastChatEnd = System.currentTimeMillis()
+                        lastRequestEnd = lastChatEnd
+                    }
+                    ok = !outcome.failed && !outcome.stopped
+                    requestId?.let { recordReply(it, outcome.reply, outcome.cost, outcome.requests, outcome.seconds) }
+                    returnToComposer()
+                    HiddenDisplay.park()
                 }
-                add(ChatItem.User(ids.incrementAndGet(), text))
-                val (reply, cost, requests, seconds) = try {
-                    run(text, agent(), _busy)
-                } finally {
-                    lastChatEnd = System.currentTimeMillis()
-                    lastRequestEnd = lastChatEnd
-                }
-                requestId?.let { recordReply(it, reply, cost, requests, seconds) }
-                returnToComposer()
-                HiddenDisplay.park()
+            } finally {
+                done?.invoke(!ok)
             }
         }
     }
@@ -196,6 +235,7 @@ object AgentHub {
                     // What the user sees: the routine's name, if it has one, and its trigger.
                     val label = routine.name?.let { "$it · $trigger" } ?: trigger
                     add(ChatItem.User(ids.incrementAndGet(), routine.prompt, source = label))
+                    effectSource = Triple("routine", routine.id, label)
                     val text = buildString {
                         append("[Routine ${routine.id}: ${trigger.replaceFirstChar { it.lowercase() }}. The user set this up earlier and ")
                         append("may not be looking at the phone; your reply is shown to them as a notification, so make it self-contained.]\n")
@@ -231,7 +271,9 @@ object AgentHub {
     }
 
     /** `failed`: the request errored (API or network), as opposed to finishing or being stopped. */
-    private data class Outcome(val reply: String, val cost: Double, val requests: Int, val seconds: Double, val failed: Boolean = false)
+    private data class Outcome(
+        val reply: String, val cost: Double, val requests: Int, val seconds: Double, val failed: Boolean = false, val stopped: Boolean = false,
+    )
 
     /**
      * Waits until there is a validated network, or [timeoutMs] passes. On the RAVOZ, Wi-Fi doesn't rejoin a network
@@ -271,6 +313,7 @@ object AgentHub {
         var cost = 0.0
         var requests = 0
         var failed = false
+        var stopped = false
         val reply = try {
             val before = a.usage.cost
             val beforeRequests = a.usage.requests
@@ -282,6 +325,7 @@ object AgentHub {
                 _totalCost.value = spentBefore + (agent?.usage?.cost ?: 0.0) + (routineAgent?.usage?.cost ?: 0.0)
             }
         } catch (e: CancellationException) {
+            stopped = true
             "[Stopped.]"
         } catch (e: AnthropicServiceException) {
             Log.e(TAG, "API error", e)
@@ -296,7 +340,7 @@ object AgentHub {
         clearDraft()
         add(ChatItem.Reply(ids.incrementAndGet(), reply, cost, seconds))
         busy.value = false
-        return Outcome(reply, cost, requests, seconds, failed)
+        return Outcome(reply, cost, requests, seconds, failed, stopped)
     }
 
     fun stop() {
@@ -380,6 +424,7 @@ object AgentHub {
         override fun toolCall(tool: String, args: JSONObject) {
             // Text streamed before a tool call is a preamble ("Let me check"), not the reply.
             clearDraft()
+            tapFacts = if (tool == "act" && args.optString("action") == "tap" && args.has("element")) tapFacts(args.optInt("element")) else null
             add(ChatItem.ToolCall(ids.incrementAndGet(), label(tool, args), tools.describe(tool, args)))
         }
 
@@ -387,7 +432,88 @@ object AgentHub {
             val pending = thread.value.lastOrNull { it is ChatItem.ToolCall && it.result == null } ?: return
             replace(pending.id) { (it as ChatItem.ToolCall).copy(result = summary, isError = isError) }
         }
+
+        override fun toolDone(tool: String, args: JSONObject, output: ToolOutput) {
+            val facts = (if (tool == "act") tapFacts else null)?.copy(undo = output.undo) ?: CallFacts(undo = output.undo)
+            val now = java.time.ZonedDateTime.now()
+            val classified = runCatching { Effects.classify(tool, args, facts, now) }
+                .onFailure { Log.e(TAG, "could not classify $tool", it) }.getOrNull() ?: return
+            val (source, sourceId, sourceLabel) = effectSource
+            val effect = Effect(
+                id = ActivityLog.newId(), time = now.toInstant().toEpochMilli(), source = source, sourceId = sourceId,
+                sourceLabel = sourceLabel, tool = tool, call = tools.describe(tool, args), label = classified.label,
+                tier = classified.tier, undo = classified.undo?.toString(),
+                state = if (classified.tier == UndoTier.NONE) UndoState.NONE else UndoState.AVAILABLE,
+                expiresAt = classified.expiresAt, app = facts.app,
+            )
+            ActivityLog.record(effect)
+            add(ChatItem.Effect(ids.incrementAndGet(), effect))
+        }
     }
+
+    /** What an `act` tap on [element] is about to hit, and in which app (read before the tap changes the screen). */
+    private fun tapFacts(element: Int): CallFacts = runCatching {
+        val pkg = HiddenDisplay.topAppPackage(HiddenDisplay.targetDisplay())
+        val app = pkg?.let { p ->
+            runCatching { appContext.packageManager.getApplicationLabel(appContext.packageManager.getApplicationInfo(p, 0)).toString() }.getOrDefault(p)
+        }
+        CallFacts(target = tools.elementLabel(element), targetKind = tools.elementKind(element), app = app)
+    }.getOrDefault(CallFacts())
+
+    // --- Effects and undo (Activity.kt, Undo.kt) --------------------------------------------------------------------
+
+    /**
+     * Undoes an effect: tier 1 here and now, with no API call; tier 2 by sending "Undo: <label>" to the chat agent with
+     * the receipt attached (a new act in the chat; the effect counts as undone if that request finishes without an
+     * error or a stop). The effect's state goes PENDING, then UNDONE or FAILED (with the reason in `detail`).
+     * False if it can't be undone (tier 3, already undone, expired, unknown id).
+     */
+    fun undo(effectId: String): Boolean {
+        val effect = ActivityLog.get(effectId)?.takeIf { it.canUndo() } ?: return false
+        when (effect.tier) {
+            UndoTier.NONE -> return false
+            UndoTier.LOCAL -> {
+                val spec = JSONObject(effect.undo ?: return false)
+                ActivityLog.update(effectId, UndoState.PENDING)
+                scope.launch(Dispatchers.IO) {
+                    // The Clock app shows its timer notification (which the timer undo uses) only while it's not in front.
+                    if (spec.optString("op") == "timer" && !_busy.value && !_routineBusy.value) HiddenDisplay.park()
+                    val result = runCatching { Undo.local(tools, spec) }
+                    result.onFailure { Log.w(TAG, "undo $effectId failed", it) }
+                    ActivityLog.update(
+                        effectId, if (result.isSuccess) UndoState.UNDONE else UndoState.FAILED,
+                        result.getOrNull() ?: result.exceptionOrNull()?.let { it.message ?: it.javaClass.simpleName },
+                    )
+                    // The alarm undo goes through the work display; put it away unless a request is using it.
+                    if (spec.optString("op") == "alarm" && !_busy.value && !_routineBusy.value) HiddenDisplay.park()
+                }
+            }
+            UndoTier.AGENT -> {
+                ActivityLog.update(effectId, UndoState.PENDING)
+                val (text, receipt) = Undo.agentRequest(effect)
+                submit(text, context = receipt) { failed ->
+                    ActivityLog.update(effectId, if (failed) UndoState.FAILED else UndoState.UNDONE, if (failed) "The undo request didn't finish." else null)
+                }
+            }
+        }
+        return true
+    }
+
+    /** Keeps the chat's receipt rows in step with the log. */
+    private fun effectChanged(effect: Effect) {
+        val swap = { list: List<ChatItem> -> list.map { if (it is ChatItem.Effect && it.effect.id == effect.id) it.copy(effect = effect) else it } }
+        _items.update(swap)
+        _routineItems.update(swap)
+    }
+
+    /** Replaces memory note [index] (blank deletes it). False if there's no such note. */
+    fun editNote(index: Int, text: String): Boolean = MemoryNotes.edit(index, text)
+
+    /** Deletes memory note [index]; returns it (for an Undo pill: [restoreNote]), or null if there's none. */
+    fun deleteNote(index: Int): String? = MemoryNotes.remove(index)
+
+    /** Puts a deleted note back at [index]. */
+    fun restoreNote(index: Int, text: String) = MemoryNotes.insert(index, text)
 
     private fun label(tool: String, args: JSONObject) = StepLabels.label(tool, args, tools::elementLabel)
 

@@ -1,7 +1,9 @@
 package com.or1.agent.tools
 
 import android.content.ContentProviderOperation
+import android.content.ContentUris
 import android.content.Context
+import android.provider.ContactsContract
 import android.provider.ContactsContract.CommonDataKinds.Email
 import android.provider.ContactsContract.CommonDataKinds.Phone
 import android.provider.ContactsContract.CommonDataKinds.StructuredName
@@ -13,10 +15,21 @@ import org.json.JSONObject
 class ContactsTool(context: Context) {
     private val resolver = context.contentResolver
 
-    fun run(args: JSONObject): String = when (val action = args.getString("action")) {
-        "find" -> find(args.optString("query"))
+    fun run(args: JSONObject): ToolOutput = when (val action = args.getString("action")) {
+        "find" -> ToolOutput(find(args.optString("query")))
         "add" -> add(args)
         else -> throw IllegalArgumentException("Unknown action '$action'.")
+    }
+
+    /** Undo of add: deletes the raw contact outright (as its sync adapter, so it isn't left marked deleted). */
+    fun deleteRawContact(id: Long): String {
+        val uri = ContentUris.withAppendedId(RawContacts.CONTENT_URI, id)
+        val name = resolver.query(uri, arrayOf(RawContacts.DISPLAY_NAME_PRIMARY, RawContacts.DELETED), null, null, null)?.use {
+            if (it.moveToFirst() && it.getInt(1) == 0) it.getString(0).orEmpty() else null
+        } ?: error("The contact was already deleted.")
+        val asAdapter = uri.buildUpon().appendQueryParameter(ContactsContract.CALLER_IS_SYNCADAPTER, "true").build()
+        check(resolver.delete(asAdapter, null, null) > 0) { "The contacts provider didn't delete it." }
+        return "Deleted contact $name."
     }
 
     private fun find(query: String): String {
@@ -37,7 +50,7 @@ class ContactsTool(context: Context) {
         return found.joinToString("\n") { (name, details) -> "- $name: ${details.joinToString().ifEmpty { "no number or email" }}" }
     }
 
-    private fun add(args: JSONObject): String {
+    private fun add(args: JSONObject): ToolOutput {
         val name = args.optString("name").ifBlank { throw IllegalArgumentException("add needs `name`.") }
         val phone = args.optString("phone").takeIf { it.isNotBlank() }
         val email = args.optString("email").takeIf { it.isNotBlank() }
@@ -56,7 +69,8 @@ class ContactsTool(context: Context) {
             ops += ContentProviderOperation.newInsert(Data.CONTENT_URI).withValueBackReference(Data.RAW_CONTACT_ID, 0)
                 .withValue(Data.MIMETYPE, Email.CONTENT_ITEM_TYPE).withValue(Email.ADDRESS, it).withValue(Email.TYPE, Email.TYPE_OTHER).build()
         }
-        resolver.applyBatch("com.android.contacts", ops)
-        return "Added $name" + listOfNotNull(phone, email).joinToString("") { ", $it" } + "."
+        val results = resolver.applyBatch("com.android.contacts", ops)
+        val undo = results.firstOrNull()?.uri?.let { JSONObject().put("op", "contact_delete").put("raw_contact_id", ContentUris.parseId(it)) }
+        return ToolOutput("Added $name" + listOfNotNull(phone, email).joinToString("") { ", $it" } + ".", undo = undo)
     }
 }

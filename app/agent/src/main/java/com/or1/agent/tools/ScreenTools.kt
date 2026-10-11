@@ -52,6 +52,8 @@ class ScreenTools(private val context: Context) {
         return "an unlabeled $kind"
     }
 
+    fun kindOf(id: Int): String? = elements[id]?.cls
+
     private fun firstText(node: AccessibilityNodeInfo, depth: Int): String? {
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue

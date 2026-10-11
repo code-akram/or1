@@ -17,6 +17,7 @@ import com.anthropic.models.messages.ThinkingConfigAdaptive
 import com.anthropic.models.messages.Tool
 import com.anthropic.models.messages.ToolResultBlockParam
 import com.anthropic.models.messages.ToolUseBlock
+import com.or1.agent.tools.ToolOutput
 import com.or1.agent.tools.Tools
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -73,6 +74,8 @@ interface AgentHooks {
     fun text(text: String) {}
     fun toolCall(tool: String, args: JSONObject) {}
     fun toolResult(tool: String, summary: String, isError: Boolean) {}
+    /** After a call succeeded (right after [toolResult]), with the full output: its undo data makes the effect. */
+    fun toolDone(tool: String, args: JSONObject, output: ToolOutput) {}
 }
 
 /** The agent loop: one user message in, tool calls against the phone, one reply out. Port of proto/src/or1/agent.py. */
@@ -208,6 +211,7 @@ class Agent(
             return result.content(error).isError(true).build()
         }
         hooks.toolResult(name, output.text, false)
+        hooks.toolDone(name, args, output)
         transcript.log(JSONObject().put("tool", name).put("args", args).put("result", output.text).put("image", output.jpegBase64 != null))
         if (output.jpegBase64 == null) return result.content(output.text).build()
         return result.contentOfBlocks(

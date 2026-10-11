@@ -47,6 +47,10 @@ class AgentService : Service() {
  * result in logcat tag or1-audio and files/audio.txt);
  * `--es wallpaper black` sets a plain black wallpaper on home and lock (provisioning: nothing but or1 from boot on).
  *
+ * Effects ([ActivityLog]): `--es effects list|today` writes the recent (or today's) effects, newest first and eval ones
+ * included, one per line (`id tier state source label | call | detail`) to files/effects.txt and logcat tag or1-activity;
+ * `--es undo ID|last` undoes one (`last`: the newest that can be), then writes the list again once it settles.
+ *
  * Hidden display checks: `--es display info|create|launch|tap|back|home|park|restore|focus|snap|front|move|tool [--es name N --es args JSON] [--es pkg P] [--ei x X --ei y Y]
  * [--ei task T]`; results go to logcat (tag or1-display) and files/display.txt.
  */
@@ -59,6 +63,19 @@ class DebugReceiver : BroadcastReceiver() {
         intent.getStringExtra("lockdown")?.let { Lockdown.setEnabled(it != "off"); return }
         intent.getLongExtra("backdate_chat_ms", 0).takeIf { it > 0 }?.let { AgentHub.backdateChat(it); return }
         intent.getStringExtra("dismiss")?.let { NotifListener.dismiss(it.split(',').toSet()); return }
+        intent.getStringExtra("effects")?.let { writeEffects(context, today = it == "today"); return }
+        intent.getStringExtra("undo")?.let { id ->
+            val target = if (id == "last") ActivityLog.effects.value.firstOrNull { it.canUndo() }?.id else id
+            val started = target != null && AgentHub.undo(target)
+            android.util.Log.i("or1-activity", "undo $id -> ${target ?: "nothing to undo"}: ${if (started) "started" else "not undoable"}")
+            kotlin.concurrent.thread {
+                // Tier 1 settles in a few seconds; a tier-2 undo is a whole agent request.
+                val deadline = System.currentTimeMillis() + 120_000
+                while (target != null && ActivityLog.get(target)?.state == UndoState.PENDING && System.currentTimeMillis() < deadline) Thread.sleep(500)
+                writeEffects(context, today = false)
+            }
+            return
+        }
         if (intent.getStringExtra("wallpaper") == "black") {
             val black = android.graphics.Bitmap.createBitmap(72, 160, android.graphics.Bitmap.Config.ARGB_8888)
             black.eraseColor(android.graphics.Color.BLACK)
@@ -82,6 +99,16 @@ class DebugReceiver : BroadcastReceiver() {
             fresh = intent.getBooleanExtra("fresh", false),
         )
     }
+}
+
+private fun writeEffects(context: Context, today: Boolean) {
+    val all = ActivityLog.effects.value
+    val text = (if (today) all.today() else all.take(50)).joinToString("\n") { e ->
+        "${e.id} tier${e.tier.level} ${e.stateAt().name.lowercase()} ${e.source}${e.sourceId?.let { ":$it" }.orEmpty()} ${e.label} | ${e.call}" +
+            (e.detail?.let { " | $it" }.orEmpty())
+    }.ifEmpty { "no effects" }
+    android.util.Log.i("or1-activity", text)
+    java.io.File(context.filesDir, "effects.txt").writeText(text + "\n")
 }
 
 private fun displayCommand(context: Context, command: String, intent: Intent) {

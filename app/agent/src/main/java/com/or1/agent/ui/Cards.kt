@@ -81,6 +81,7 @@ fun groupTurns(items: List<ChatItem>): List<Turn> {
         is ChatItem.Info -> infos += item
         is ChatItem.Draft -> draft = item
         is ChatItem.Reply -> { reply = item; flush() }
+        is ChatItem.Effect -> {}
     }
     flush()
     return turns
