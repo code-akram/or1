@@ -56,6 +56,34 @@ def cleanup_phone_clock() -> None:
               "pm install-existing --user 0 com.android.gallery3d >/dev/null; pm enable com.android.gallery3d >/dev/null")
 
 
+# Settings the device tasks change (volume, brightness, DND, timeout, dark mode): (read, write) shell commands.
+DEVICE_SETTINGS = {
+    "media volume": ("cmd media_session volume --stream 3 --get 2>/dev/null | grep -o 'volume is [0-9]*' | grep -o '[0-9]*'",
+                     "cmd media_session volume --stream 3 --set {}"),
+    "brightness": ("settings get system screen_brightness", "settings put system screen_brightness {}"),
+    "auto-brightness": ("settings get system screen_brightness_mode", "settings put system screen_brightness_mode {}"),
+    "screen timeout": ("settings get system screen_off_timeout", "settings put system screen_off_timeout {}"),
+    "DND": ("settings get global zen_mode", "cmd notification set_dnd {}"),
+    "dark mode": ("cmd uimode night", "cmd uimode night {}"),
+}
+DND_MODES = {"0": "off", "1": "priority", "2": "none", "3": "alarms"}
+
+
+def save_device_settings() -> dict[str, str]:
+    return {name: adb.shell(read).strip() for name, (read, _) in DEVICE_SETTINGS.items()}
+
+
+def restore_device_settings(saved: dict[str, str]) -> None:
+    """Puts back what the tasks changed, so an eval never leaves the phone at volume 1 or with DND on."""
+    for name, value in saved.items():
+        if name == "DND":
+            value = DND_MODES.get(value, "off")
+        elif name == "dark mode":
+            value = value.removeprefix("Night mode: ").strip()
+        if value and value != "null":
+            adb.shell(DEVICE_SETTINGS[name][1].format(shlex.quote(value)) + " >/dev/null 2>&1")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the Phase 0 task list.")
     parser.add_argument("--model", default="claude-haiku-5-5")
@@ -74,6 +102,7 @@ def main() -> None:
     selected = {int(n) for n in args.only.split(",")} if args.only else None
     out_path = RUNS_DIR / time.strftime(f"eval-%Y%m%d-%H%M%S-{args.model}-{args.effort}.jsonl")
     results = []
+    saved = save_device_settings() if args.target == "phone" else {}
 
     # Cleanup runs even if a task crashes (e.g. an adb protocol fault), so no test timer is left ringing.
     try:
@@ -119,6 +148,7 @@ def main() -> None:
     finally:
         if args.target == "phone":
             cleanup_phone_clock()
+            restore_device_settings(saved)
     judged = [r for r in results if r["success"] is not None]
     passed = sum(r["success"] for r in judged)
     total_cost = sum(r["cost"] for r in results)
