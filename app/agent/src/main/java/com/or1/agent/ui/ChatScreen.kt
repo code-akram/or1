@@ -230,7 +230,7 @@ fun ChatScreen() {
                         keyboard?.hide()
                         triageOpen = true
                     }
-                    val cardActions = remember { CardActions(openRoutines = { page = Page.ROUTINES }, openTriage = openTriage) }
+                    val cardActions = remember { CardActions(openRoutines = { page = Page.ROUTINES }, openTriage = openTriage, openViewer = { closeComposer(); viewerOpen = true }) }
                     Box(Modifier.fillMaxSize().background(Palette.Ink0)) {
                         Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
                             TopBar(
