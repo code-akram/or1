@@ -109,6 +109,7 @@ fun ChatScreen() {
         val input = remember { ComposerInput() }
         var expanded by rememberSaveable { mutableStateOf(false) }
         var viewerOpen by remember { mutableStateOf(false) }
+        var voiceOpen by remember { mutableStateOf(false) }
         var pastChat by remember { mutableStateOf<PastChat?>(null) }
         // Routines, Today or What or1 knows, over the chat (one at a time).
         var page by remember { mutableStateOf<Page?>(null) }
@@ -181,6 +182,7 @@ fun ChatScreen() {
             scope.launch { drawer.close() }
             triageOpen = false
             viewerOpen = false
+            voiceOpen = false
             page = null
             pastChat = null
             focus.clearFocus(force = true)
@@ -196,6 +198,7 @@ fun ChatScreen() {
                 triageOpen -> triageOpen = false
                 // Drawn over everything below.
                 drawer.isOpen -> scope.launch { drawer.close() }
+                voiceOpen -> voiceOpen = false
                 viewerOpen -> viewerOpen = false
                 page != null -> page = null
                 pastChat != null -> pastChat = null
@@ -286,6 +289,7 @@ fun ChatScreen() {
                                     }
                                 },
                                 modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 10.dp),
+                                onVoiceMode = { closeComposer(); voiceOpen = true },
                             )
                         }
                         pastChat?.let { HistoryView(it, onClose = { pastChat = null }) }
@@ -303,6 +307,7 @@ fun ChatScreen() {
                             )
                         }
                         TriageSheet(triageOpen, onClose = { triageOpen = false })
+                        VoiceModeHost(voiceOpen, onClose = { voiceOpen = false })
                     }
                 }
             }
@@ -543,6 +548,7 @@ private fun Drawer(totalCost: Double, routineCount: Int, onNewChat: () -> Unit, 
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
                 )
             }
+            SpeakRepliesSwitch()
             DeveloperSwitch()
             if (DeveloperDetails.on) {
                 Text(

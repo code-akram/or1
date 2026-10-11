@@ -59,7 +59,9 @@ class AgentService : Service() {
  *
  * Voice ([Voice.kt]): `--es voice speak:<text>` speaks it and `--es voice listen` records one utterance; the result (final text,
  * peak level, sentences, word boundaries, recogniser and network) goes to files/voice.txt and logcat tag or1-voice;
- * `--es voice stop` stops both. `--es now dump` writes the Now state ([NowState]) to files/now.txt (tag or1-now).
+ * `--es voice stop` stops both. `--es voice support` writes what each recogniser (default and on-device) says about its
+ * languages (installed, downloading, downloadable, online) and the plan it picks; `--es voice download` triggers the
+ * language model download on each recogniser that hasn't got it (progress in logcat on API 34). `--es now dump` writes the Now state ([NowState]) to files/now.txt (tag or1-now).
  *
  * Hidden display checks: `--es display info|create|launch|tap|back|home|park|restore|focus|snap|front|move|tool [--es name N --es args JSON] [--es pkg P] [--ei x X --ei y Y]
  * [--ei task T]`; results go to logcat (tag or1-display) and files/display.txt.
@@ -176,19 +178,20 @@ private fun writeNow(context: Context) {
     java.io.File(context.filesDir, "now.txt").writeText(text + "\n")
 }
 
-/** `speak:<text>`, `listen` or `stop`; see [DebugReceiver]. */
+/** `speak:<text>`, `listen`, `stop`, `support` or `download`; see [DebugReceiver]. */
 private fun voiceCommand(context: Context, command: String) {
     kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
         val result = try {
             when {
                 command.startsWith("speak:") -> debugSpeak(context, command.removePrefix("speak:"))
                 command == "listen" -> debugListen(context)
+                command == "support" || command == "download" -> debugSupport(context, download = command == "download")
                 command == "stop" -> {
                     VoiceEngines.output(context).stop()
                     VoiceEngines.input(context).cancel()
                     "stopped"
                 }
-                else -> "unknown voice command '$command' (speak:<text>, listen, stop)"
+                else -> "unknown voice command '$command' (speak:<text>, listen, stop, support, download)"
             }
         } catch (e: Exception) {
             "error: $e"
@@ -218,6 +221,18 @@ private suspend fun debugSpeak(context: Context, text: String): String = kotlinx
     "speak: ready=$ready finished=$finished engine=${(out as? AndroidSpeechOutput)?.engine ?: "default"} " +
         "sentences=${p.sentences.size} spoken=$spoken words=${(out as? AndroidSpeechOutput)?.words} peak=${"%.2f".format(peak)} " +
         "took=${"%.1f".format((System.currentTimeMillis() - started) / 1000.0)}s\n" + p.sentences.withIndex().joinToString("\n") { "${it.index}: ${it.value}" }
+}
+
+/** The recognisers' language support, or (with [download]) a model download triggered where it's missing. */
+private suspend fun debugSupport(context: Context, download: Boolean): String {
+    val input = VoiceEngines.input(context) as? AndroidSpeechInput ?: return "not the Android recogniser"
+    val report = kotlinx.coroutines.withTimeoutOrNull(15_000) {
+        kotlinx.coroutines.suspendCancellableCoroutine<String> { cont ->
+            val done = { r: String -> if (cont.isActive) cont.resumeWith(Result.success(r)) }
+            if (download) input.download(done) else input.support(done)
+        }
+    } ?: "no answer from the recognisers in 15 s"
+    return (if (download) "download:\n" else "support:\n") + report
 }
 
 private suspend fun debugListen(context: Context): String = kotlinx.coroutines.coroutineScope {
