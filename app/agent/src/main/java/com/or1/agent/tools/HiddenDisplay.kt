@@ -98,6 +98,23 @@ object HiddenDisplay {
     /** The label of the app in front on the work display (null when it's empty or showing or1's app grid). */
     val foregroundApp: StateFlow<String?> = _foregroundApp
 
+    private val _foregroundPackage = MutableStateFlow<String?>(null)
+    /** The package behind [foregroundApp] (the live media card follows its app's frames only while it's in front). */
+    val foregroundPackage: StateFlow<String?> = _foregroundPackage
+
+    /**
+     * How often [preview] converts a frame: PREVIEW_INTERVAL_MS, or [FAST_PREVIEW_MS] while the live media card asks
+     * for it ([fastPreview]) because a media app is in front.
+     */
+    @Volatile
+    private var previewInterval = PREVIEW_INTERVAL_MS
+    const val FAST_PREVIEW_MS = 300L
+
+    /** Converts frames every [FAST_PREVIEW_MS] instead of every 500 ms; the live media card sets it while it shows playback. */
+    fun fastPreview(fast: Boolean) {
+        previewInterval = if (fast) FAST_PREVIEW_MS else PREVIEW_INTERVAL_MS
+    }
+
     /** The display's size in pixels (the panel's), for [TapMark]s. */
     @Volatile
     private var size = android.graphics.Point(0, 0)
@@ -180,6 +197,7 @@ object HiddenDisplay {
         _preview.value = null
         _inUse.value = false
         _foregroundApp.value = null
+        _foregroundPackage.value = null
     }
 
     /** Keyboard policy for the hidden display: FALLBACK while the agent works, LOCAL while the user is viewing it. */
@@ -343,7 +361,7 @@ object HiddenDisplay {
         held?.close()
         held = image
         dirty = true
-        val wait = PREVIEW_INTERVAL_MS - (SystemClock.uptimeMillis() - lastConverted)
+        val wait = previewInterval - (SystemClock.uptimeMillis() - lastConverted)
         if (wait <= 0) convert() else if (!handler.hasCallbacks(convertRunnable)) handler.postDelayed(convertRunnable, wait)
     }
 
@@ -404,6 +422,7 @@ object HiddenDisplay {
 
     private val foregroundRunnable = Runnable {
         val pkg = id?.let { topAppPackage(it) }?.takeIf { it != context.packageName }
+        _foregroundPackage.value = pkg
         _foregroundApp.value = pkg?.let { p ->
             runCatching { context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(p, 0)).toString() }.getOrDefault(p)
         }
