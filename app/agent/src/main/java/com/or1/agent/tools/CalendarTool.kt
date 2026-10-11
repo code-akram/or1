@@ -17,6 +17,9 @@ import java.util.Locale
 import org.json.JSONArray
 import org.json.JSONObject
 
+/** One instance of an event in a range (the calendar-day card). All-day ones are stored at UTC midnight. */
+data class CalendarEvent(val id: Long, val title: String, val begin: Long, val end: Long, val allDay: Boolean, val location: String?)
+
 /**
  * Calendar events through the calendar provider (no UI driving). There is no Google account, so events go to a local
  * "Phone" calendar, created on first use; Etar shows and edits it.
@@ -36,7 +39,7 @@ class CalendarTool(context: Context) {
     private fun list(args: JSONObject): String {
         val zone = ZoneId.systemDefault()
         val from = args.optString("date").takeIf { it.isNotBlank() }?.let(::parseDate) ?: LocalDate.now(zone)
-        val days = args.optInt("days", 7).coerceIn(1, 366)
+        val days = args.optInt("days", DEFAULT_DAYS).coerceIn(1, MAX_DAYS)
         val begin = from.atStartOfDay(zone).toInstant().toEpochMilli()
         val end = from.plusDays(days.toLong()).atStartOfDay(zone).toInstant().toEpochMilli()
         val uri = Instances.CONTENT_URI.buildUpon().also { ContentUris.appendId(it, begin); ContentUris.appendId(it, end) }.build()
@@ -215,7 +218,35 @@ class CalendarTool(context: Context) {
         throw IllegalArgumentException("Times are YYYY-MM-DDTHH:MM in local time, got '$text'.")
     }
 
-    private companion object {
-        const val LOCAL_ACCOUNT = "Phone"
+    companion object {
+        private const val LOCAL_ACCOUNT = "Phone"
+        const val DEFAULT_DAYS = 7
+        const val MAX_DAYS = 366
+
+        /**
+         * The days a `list` call covers, from its raw `date` and `days` arguments, as the tool reads them: today and 7
+         * days by default. Null when the date doesn't parse (the call failed).
+         */
+        fun listRange(date: String?, days: String?, today: LocalDate): Pair<LocalDate, Int>? {
+            val from = date?.takeIf { it.isNotBlank() }?.let { runCatching { LocalDate.parse(it.trim()) }.getOrNull() ?: return null } ?: today
+            val n = days?.trim()?.toIntOrNull() ?: DEFAULT_DAYS
+            return from to n.coerceIn(1, MAX_DAYS)
+        }
+
+        /** Event instances overlapping [days] days from [from] (provider order: by start), for the calendar-day card. */
+        fun instances(resolver: android.content.ContentResolver, from: LocalDate, days: Int, zone: ZoneId): List<CalendarEvent> {
+            val begin = from.atStartOfDay(zone).toInstant().toEpochMilli()
+            val end = from.plusDays(days.toLong()).atStartOfDay(zone).toInstant().toEpochMilli()
+            val uri = Instances.CONTENT_URI.buildUpon().also { ContentUris.appendId(it, begin); ContentUris.appendId(it, end) }.build()
+            val projection = arrayOf(Instances.EVENT_ID, Instances.TITLE, Instances.BEGIN, Instances.END, Instances.ALL_DAY, Instances.EVENT_LOCATION)
+            val out = mutableListOf<CalendarEvent>()
+            resolver.query(uri, projection, null, null, "${Instances.BEGIN} ASC")?.use { c ->
+                while (c.moveToNext()) out += CalendarEvent(
+                    id = c.getLong(0), title = c.getString(1).orEmpty(), begin = c.getLong(2), end = c.getLong(3),
+                    allDay = c.getInt(4) == 1, location = c.getString(5)?.takeIf { it.isNotBlank() },
+                )
+            }
+            return out
+        }
     }
 }

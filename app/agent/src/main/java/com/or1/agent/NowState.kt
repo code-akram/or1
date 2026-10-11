@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.AlarmManager
 import android.app.Notification
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
@@ -11,6 +12,10 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.database.ContentObserver
 import android.graphics.drawable.Icon
+import android.media.MediaMetadata
+import android.media.session.MediaController
+import android.media.session.MediaSessionManager
+import android.media.session.PlaybackState
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -65,6 +70,37 @@ data class NextAlarm(
     /** The effect that set it (undo turns it off), if or1 did and it can still be undone. */
     val effectId: String?,
 )
+
+/**
+ * A media session (MediaSessionManager, through the notification listener's access): the live media card's title and
+ * play state. [state] is a `PlaybackState` constant.
+ */
+data class MediaNow(val pkg: String, val title: String?, val artist: String?, val state: Int) {
+    val playing: Boolean get() = state == PlaybackState.STATE_PLAYING || state == PlaybackState.STATE_BUFFERING
+    /** Stopped or errored: the card freezes. Paused keeps it live (with the play badge). */
+    val stopped: Boolean get() = state == PlaybackState.STATE_STOPPED || state == PlaybackState.STATE_ERROR
+}
+
+/**
+ * Packages known to play media: a few by name, plus any seen holding a media session in this process ([NowState]
+ * adds them). Which turns get a live media card ([com.or1.agent.ui.ResultCards.of]).
+ */
+object MediaApps {
+    val KNOWN = setOf(
+        "com.google.android.youtube", "com.google.android.apps.youtube.music", "com.google.android.apps.youtube.kids",
+        "com.spotify.music", "com.google.android.apps.podcasts", "au.com.shiftyjelly.pocketcasts", "com.soundcloud.android",
+        "deezer.android.app", "com.netflix.mediaclient", "tv.twitch.android.app", "org.videolan.vlc", "com.amazon.mp3",
+        "com.apple.android.music", "com.pandora.android", "com.audible.application", "org.schabi.newpipe",
+    )
+    /** Video apps: their player sits at the top of a portrait screen (the card crops there). */
+    val VIDEO = setOf(
+        "com.google.android.youtube", "com.google.android.apps.youtube.kids", "com.netflix.mediaclient", "tv.twitch.android.app",
+        "org.videolan.vlc", "org.schabi.newpipe",
+    )
+
+    @Volatile
+    var seen: Set<String> = emptySet()
+}
 
 /** The next (or current) timed calendar event within 24 hours. Times are epoch ms. */
 data class NextEvent(val eventId: Long, val title: String, val begin: Long, val end: Long, val location: String?)
@@ -133,6 +169,14 @@ object NowState {
     private val _chips = MutableStateFlow<List<NowChip>>(emptyList())
     /** The Now strip, most urgent first ([NowLogic.chips]). */
     val chips: StateFlow<List<NowChip>> = _chips
+    private val _calendarChanges = MutableStateFlow(0)
+    /** Bumped on every calendar provider change (the calendar-day card re-reads its days). */
+    val calendarChanges: StateFlow<Int> = _calendarChanges
+    private val _media = MutableStateFlow<List<MediaNow>>(emptyList())
+    /** Active media sessions; empty without notification access. */
+    val media: StateFlow<List<MediaNow>> = _media
+    private var sessionsWatched = false
+    private val controllers = mutableListOf<Pair<MediaController, MediaController.Callback>>()
 
     // Timer tracking: or1's timers by effect id, and ids that are done (never tracked again).
     private var tracked: List<TrackedTimer> = emptyList()
@@ -151,7 +195,10 @@ object NowState {
         }, IntentFilter(AlarmManager.ACTION_NEXT_ALARM_CLOCK_CHANGED), Context.RECEIVER_EXPORTED)
         runCatching {
             app.contentResolver.registerContentObserver(CalendarContract.CONTENT_URI, true, object : ContentObserver(main) {
-                override fun onChange(selfChange: Boolean) = refreshEvent()
+                override fun onChange(selfChange: Boolean) {
+                    _calendarChanges.value++
+                    refreshEvent()
+                }
             })
         }.onFailure { Log.w(TAG, "no calendar observer", it) }
         scope.launch { ActivityLog.effects.collect { refreshTimers(); refreshAlarm() } }
@@ -160,6 +207,8 @@ object NowState {
                 delay(150) // A burst of posts is one refresh.
                 refreshTimers()
                 refreshNotifications()
+                // Media sessions are read with the listener's access: try again once it connects.
+                main.post { watchMedia() }
             }
         }
         scope.launch { AgentHub.runningRoutine.collect { refreshChips() } }
@@ -275,6 +324,47 @@ object NowState {
             NextAlarm(info.triggerTime, match?.let { NowLogic.undoLabel(it) }, match?.takeIf { it.canUndo() }?.id)
         }
         refreshChips()
+    }
+
+    // --- Media sessions ---------------------------------------------------------------------------------------------
+
+    /** Follows the active media sessions (on the main thread), once notification access allows it. */
+    private fun watchMedia() {
+        if (sessionsWatched) return
+        val msm = context.getSystemService(MediaSessionManager::class.java) ?: return
+        val component = ComponentName(context, NotifListener::class.java)
+        runCatching {
+            msm.addOnActiveSessionsChangedListener({ list -> onSessions(list.orEmpty()) }, component, main)
+            sessionsWatched = true
+            onSessions(msm.getActiveSessions(component))
+        }.onFailure { Log.i(TAG, "no media sessions yet: ${it.message}") }
+    }
+
+    private fun onSessions(list: List<MediaController>) {
+        for ((c, cb) in controllers) runCatching { c.unregisterCallback(cb) }
+        controllers.clear()
+        for (c in list) {
+            val cb = object : MediaController.Callback() {
+                override fun onPlaybackStateChanged(state: PlaybackState?) = publishMedia()
+                override fun onMetadataChanged(metadata: MediaMetadata?) = publishMedia()
+                override fun onSessionDestroyed() = publishMedia()
+            }
+            runCatching { c.registerCallback(cb, main) }.onSuccess { controllers += c to cb }
+        }
+        MediaApps.seen = MediaApps.seen + list.map { it.packageName }
+        publishMedia()
+    }
+
+    private fun publishMedia() {
+        _media.value = controllers.map { (c, _) ->
+            val meta = runCatching { c.metadata }.getOrNull()
+            MediaNow(
+                pkg = c.packageName,
+                title = (meta?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: meta?.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE))?.ifBlank { null },
+                artist = (meta?.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: meta?.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE))?.ifBlank { null },
+                state = runCatching { c.playbackState?.state }.getOrNull() ?: PlaybackState.STATE_NONE,
+            )
+        }
     }
 
     private fun refreshEvent() {

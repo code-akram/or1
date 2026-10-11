@@ -67,8 +67,24 @@ the chat never leaves the screen.
   receipt rows themselves), notifications waiting (by app, two-line rows with Dismiss and Handle, live from
   `NowState`), contacts found or added (tap a number or address to copy) and a routine created (trigger, next run,
   Edit opens Routines). A card that stands for an effect carries its undo (Cancel, Off, Undo), and that effect leaves
-  the receipt. Only the newest four cards that follow a source are live (one notifications card); older ones are
-  frozen text.
+  the receipt. Only the newest four cards that follow a source are live (one notifications card, one media card);
+  older ones are frozen.
+- `LiveCards.kt` (pure side in `LiveCardLogic.kt`, JVM-tested): the M6 cards.
+  - Media: when the turn left a media app in front on the work display (the last screen read's `Foreground:` is a known
+    media package or one seen holding a media session), a 16:9 crop of `HiddenDisplay.preview` (top of the screen for
+    video apps, a little above the middle for audio) as plain image swaps, no SurfaceView. It follows frames only while
+    that app is in front, the card is on screen and the activity started, and asks for 300 ms frames meanwhile
+    (`HiddenDisplay.fastPreview`). Paused: a 48 dp ink0 70% play badge; playing (`NowState.media`): steady `live`
+    blocks top-left. App name and the session's title below. Older card, another app in front or the session stopped:
+    the last frame under an ink0 40% veil. The whole card opens the viewer (`CardActions.openViewer`).
+  - Calendar day: for a `calendar list` that found events, the asked-for days read from the provider
+    (`CalendarTool.listRange` + `instances`), re-read on `NowState.calendarChanges`: 48 dp rows (time in NumeralS in a
+    64 dp column, title, location), all-day first, past rows in text3, a 1 dp `live` now-line between rows moved on the
+    minute, day captions for a range, five rows then "N more" (opens the calendar on the work display in the viewer).
+    An empty day gets no card.
+  - Email: when the turn read a message in Gmail (`EmailReads.parse` of its screen reads: Archive in the toolbar, a
+    Reply button with a "to me" line beside it, else no card): from, subject, three serif lines of the body; Open
+    (viewer) and Archive (sends "Archive this email: <subject> from <from>" through `AgentHub.submit`).
 - `Triage.kt`: the triage sheet (`ink3`, 16 dp top corners, hairline; slides 24 dp up with a fade over a flat dim):
   notifications waiting by app with the same rows, "Handle all" (`NowState.handleAll`, one request covering them).
   Back, `or1`, a tap on the dim or dragging its top edge down closes it; handling closes it so the request shows.
@@ -240,6 +256,9 @@ emit only on change (the UI ticks countdowns itself from the end times):
   `cancelNotification`); `handle(n)` / `handleRequest(n)` sends one to the chat agent with its content marked as
   untrusted data; `handleAll()` sends every waiting one as one request (at most 30, texts clipped).
 - `routine`: the label of the routine run in progress (`AgentHub.runningRoutine`, set for the whole run).
+- `media`: active media sessions (title, artist, `PlaybackState`) from `MediaSessionManager` with the notification
+  listener's component, once access is there; packages seen with a session join `MediaApps.seen`.
+- `calendarChanges`: bumped by the calendar `ContentObserver` (the calendar-day card re-reads on it).
 - `chips`: timers (ringing, running, paused), the routine running, the alarm if within 12 h, the event if under way or
   within 3 h, the notification count.
 - The pure parts are in `NowLogic`/`ClockTimers` (JVM-tested). Debug: `--es now dump` writes `files/now.txt` (tag `or1-now`).

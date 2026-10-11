@@ -120,6 +120,24 @@ sealed interface ResultCard {
         override val effectIds get() = listOf(effect.id)
         override val ticks get() = true
     }
+
+    /** The turn left a media app ([pkg]) in front on the work display: a live crop of it ([callId]: that screen read). */
+    data class Media(val callId: Long, val pkg: String) : ResultCard {
+        override val key get() = "media:$callId"
+        override val ticks get() = true
+    }
+
+    /** `calendar list` found events: the days it asked for ([date] and [days] as the call passed them), from the provider. */
+    data class CalendarDay(val callId: Long, val date: String?, val days: String?) : ResultCard {
+        override val key get() = "calendar:$callId"
+        override val ticks get() = true
+    }
+
+    /** The turn read an email in Gmail on the work display. */
+    data class Email(val callId: Long, val email: EmailRead) : ResultCard {
+        override val key get() = "email:$callId"
+        override val ticks get() = false
+    }
 }
 
 data class ContactInfo(val name: String, val phones: List<String>, val emails: List<String>)
@@ -136,8 +154,8 @@ object ResultCards {
     /** Right after `set_timer`, [NowState] may not have picked the timer up yet: count down from the effect meanwhile. */
     const val TRACK_GRACE_MS = 5_000L
 
-    /** A turn's cards, in the order their calls ran. */
-    fun of(turn: Turn): List<ResultCard> {
+    /** A turn's cards, in the order their calls ran. [isMedia]: whether a package plays media ([MediaCards.isMedia]). */
+    fun of(turn: Turn, isMedia: (String) -> Boolean = { MediaCards.isMedia(it) }): List<ResultCard> {
         val out = mutableListOf<Pair<Long, ResultCard>>()
         val settings = mutableListOf<Effect>()
         var settingsAt = 0L
@@ -173,6 +191,19 @@ object ResultCards {
         if (people.isNotEmpty()) {
             out += finds.first().id to ResultCard.Contacts(people.take(MAX_PEOPLE), (people.size - MAX_PEOPLE).coerceAtLeast(0), null, finds.first().id)
         }
+        // The last `calendar list` that found something (an empty day gets no card: the reply says so).
+        calls.lastOrNull { callTool(it.detail) == "calendar" && callArgs(it.detail)["action"] == "list" && it.result!!.startsWith("Events from") }
+            ?.let { val args = callArgs(it.detail); out += it.id to ResultCard.CalendarDay(it.id, args["date"], args["days"]) }
+        // What the work display was left showing: a media app gets the live crop.
+        val screens = calls.filter { callTool(it.detail) in SCREEN_TOOLS }
+        screens.lastOrNull()?.let { last ->
+            val pkg = ScreenDump.foreground(last.result!!)
+            if (pkg != null && isMedia(pkg)) out += last.id to ResultCard.Media(last.id, pkg)
+        }
+        // The last message read in Gmail.
+        screens.asReversed().firstNotNullOfOrNull { call ->
+            if (ScreenDump.foreground(call.result!!) != EmailReads.GMAIL) null else EmailReads.parse(call.result)?.let { call.id to it }
+        }?.let { (id, email) -> out += id to ResultCard.Email(id, email) }
         return out.sortedBy { it.first }.map { it.second }
     }
 
@@ -184,11 +215,12 @@ object ResultCards {
 
     /**
      * Which cards are live: the newest [max] that follow a source, newest turn first; only the newest notifications
-     * card (they'd all show the same thing).
+     * card (they'd all show the same thing), and only the newest media card (there's one work display).
      */
     fun liveKeys(turns: List<List<ResultCard>>, max: Int = MAX_LIVE): Set<String> {
         val live = mutableSetOf<String>()
         var notifications = false
+        var media = false
         for (cards in turns.asReversed()) for (card in cards.asReversed()) {
             if (live.size >= max) return live
             if (!card.ticks) continue
@@ -196,10 +228,17 @@ object ResultCards {
                 if (notifications) continue
                 notifications = true
             }
+            if (card is ResultCard.Media) {
+                if (media) continue
+                media = true
+            }
             live += card.key
         }
         return live
     }
+
+    /** Calls whose result is a screen read (`Foreground: <pkg>. Screen …`). */
+    private val SCREEN_TOOLS = setOf("open", "act", "screen")
 
     /** The tool of a raw call ("contacts action=find query=Sam" → "contacts"). */
     fun callTool(detail: String): String = detail.substringBefore(' ')
@@ -362,8 +401,11 @@ private fun BlockMeter(fraction: () -> Float, modifier: Modifier = Modifier) {
 
 // --- Cards ------------------------------------------------------------------------------------------------------------
 
-/** What cards can open outside the stream. Null (the routines thread) hides the button. */
-class CardActions(val openRoutines: (() -> Unit)? = null, val openTriage: (() -> Unit)? = null)
+/**
+ * What cards can open outside the stream. Null (the routines thread) hides the button. [openViewer] opens the work
+ * screen viewer (the media, email and calendar cards).
+ */
+class CardActions(val openRoutines: (() -> Unit)? = null, val openTriage: (() -> Unit)? = null, val openViewer: (() -> Unit)? = null)
 
 val LocalCardActions = staticCompositionLocalOf { CardActions() }
 
@@ -377,11 +419,14 @@ fun ResultCardView(card: ResultCard, live: Boolean) {
         is ResultCard.Notifications -> if (live) NotificationsCard() else FrozenNotificationsCard()
         is ResultCard.Contacts -> ContactsCard(card)
         is ResultCard.RoutineCreated -> RoutineCard(card, live)
+        is ResultCard.Media -> MediaCard(card, live)
+        is ResultCard.CalendarDay -> CalendarDayCard(card, live)
+        is ResultCard.Email -> EmailCard(card)
     }
 }
 
 @Composable
-private fun CardFrame(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+internal fun CardFrame(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Column(
         modifier.fillMaxWidth().clip(Shapes.card).background(Palette.Ink2).border(1.dp, Palette.Line, Shapes.card),
         content = content,
@@ -390,7 +435,7 @@ private fun CardFrame(modifier: Modifier = Modifier, content: @Composable Column
 
 /** Glyph, title and the effect's action (or its undo state) on the right: the top row of a card. */
 @Composable
-private fun CardHeader(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, tint: androidx.compose.ui.graphics.Color = Palette.Text2, action: @Composable () -> Unit = {}) {
+internal fun CardHeader(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, tint: androidx.compose.ui.graphics.Color = Palette.Text2, action: @Composable () -> Unit = {}) {
     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = 14.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, null, tint = tint, modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(10.dp))
