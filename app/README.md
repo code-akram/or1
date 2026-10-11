@@ -147,6 +147,48 @@ and app are read before it runs.
 - Debug: `--es effects list|today` writes `files/effects.txt` (and logcat tag `or1-activity`), one line per effect:
   `id tierN state source:id label | call | detail`; `--es undo ID|last` undoes one, then writes the list once it settles.
 
+## Now state (`NowState.kt`)
+One source for the Now strip and the live cards (docs/ui-ledger.md §2, §5), started by `AgentHub.init`. StateFlows that
+emit only on change (the UI ticks countdowns itself from the end times):
+- `timers`: or1's timers from `clock set_timer` effects (end = the effect's time + seconds, in `elapsedRealtime`), followed
+  through the Clock app's timer notification. AOSP DeskClock draws that notification in a custom view (no title, no
+  `when`), so only its buttons tell the state (`ClockTimers`): Pause = running, Start/Resume/Reset = paused, Stop = ringing
+  ("Time's up"), "… all" = several; Lap (stopwatch) and Snooze/Dismiss (alarms) are skipped. With one timer the
+  notification's state is that timer's (pausing keeps the time left, resuming sets a new end). A timer whose notification
+  goes before its end is hidden (cancelled, or the Clock app is in front, which hides it) and comes back if it reappears;
+  without notification access a timer runs to its end and shows as ended for a minute. Timers set in the Clock app itself
+  show with no end time. An undone timer drops out at once. `cancelTimer(id)` undoes or1's, presses Reset on others.
+- `alarm`: `AlarmManager.nextAlarmClock`, on `ACTION_NEXT_ALARM_CLOCK_CHANGED` (a registered receiver) and every minute;
+  the label and effect id from the latest `set_alarm` effect for that hour and minute. `alarmOff()`.
+- `event`: the first timed, visible, not-declined calendar instance that hasn't ended and begins within 24 h (under way
+  counts), on a provider `ContentObserver` and every minute.
+- `notifications`: grouped by app, newest first, with the routines' filters (not or1's own, ongoing, group summaries or
+  foreground services). Items carry the small icon as a resource reference. `dismiss(key)` (listener
+  `cancelNotification`); `handle(n)` / `handleRequest(n)` sends one to the chat agent with its content marked as
+  untrusted data.
+- `routine`: the label of the routine run in progress (`AgentHub.runningRoutine`, set for the whole run).
+- `chips`: timers (ringing, running, paused), the routine running, the alarm if within 12 h, the event if under way or
+  within 3 h, the notification count.
+- The pure parts are in `NowLogic`/`ClockTimers` (JVM-tested). Debug: `--es now dump` writes `files/now.txt` (tag `or1-now`).
+
+## Voice (`Voice.kt`)
+Behind `SpeechInput`/`SpeechOutput`, from `VoiceEngines.input(context)`/`.output(context)` (swap the factories for
+ElevenLabs).
+- `AndroidSpeechInput`: `SpeechRecognizer` (the default service here is Google's `GoogleTTSRecognitionService`),
+  `EXTRA_PREFER_OFFLINE`, partial results; on the main thread as the API requires. State idle → listening → processing →
+  idle with `result`, or error (`VoiceError`: no match, timeout, network, unavailable, permission, busy). A no-match or
+  timeout after partial results keeps the partial text. `level` is `onRmsChanged` scaled to 0..1, smoothed and paced to
+  10 Hz (`LevelMeter`). Without a recognition service, `start` runs an `AudioRecord` level meter and reports
+  "unavailable".
+- `AndroidSpeechOutput`: `TextToSpeech` (Google's engine), the reply split into sentences (`Sentences.split`: markdown
+  out, abbreviations, initials and decimals kept, long ones cut at a comma) and queued one utterance each; `progress`
+  carries the reply id, its sentences and the one being spoken. `level` is a synthetic envelope pulsed on word
+  boundaries (`onRangeStart`), with a gentle wobble if the engine sends none, sampled at 10 Hz while speaking only.
+- `<queries>` for `RecognitionService` and `TTS_SERVICE` in the manifest (targetSdk 33 package visibility).
+- Debug: `--es voice speak:<text>`, `--es voice listen` (one utterance; up to 20 s, then stop), `--es voice stop`. Results
+  in `files/voice.txt` and logcat tag `or1-voice`: final text, peak level, partials, error, the recogniser service,
+  on-device availability and whether the network was up; for speak, sentences spoken, word boundaries and peak level.
+
 ## Audio check (`AudioCheck.kt`)
 `am broadcast -n com.or1.agent/.DebugReceiver --es audio test` records 1 s of room sound, then plays a 1 kHz tone at
 60% media volume (restored afterwards) while recording, and looks for the tone (Goertzel). Result in logcat tag
@@ -161,7 +203,7 @@ and the mic both work through the Android audio stack. `RECORD_AUDIO` is granted
 export JAVA_HOME=~/.local/share/jdk/temurin-17.0.20.1+1
 ./gradlew :agent:assembleDebug        # signed with the AOSP platform test key in ~/.config/or1/platform.p12
 ./gradlew :agent:assembleRelease      # same key, not debuggable, profileable from the shell
-./gradlew :agent:testDebugUnitTest    # JVM unit tests: routines, notes, audio maths, effect classification and undo data
+./gradlew :agent:testDebugUnitTest    # JVM unit tests: routines, notes, audio maths, effects and undo data, Now state, voice
 scripts/provision.sh                  # install, API key, accessibility, notification access, HOME role
 ```
 

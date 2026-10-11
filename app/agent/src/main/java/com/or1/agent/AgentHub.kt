@@ -81,6 +81,9 @@ object AgentHub {
     val routineItems: StateFlow<List<ChatItem>> = _routineItems
     private val _routineBusy = MutableStateFlow(false)
     val routineBusy: StateFlow<Boolean> = _routineBusy
+    private val _runningRoutine = MutableStateFlow<String?>(null)
+    /** The label ("Name · trigger") of the routine run in progress, from its start (network wait included) to its end. */
+    val runningRoutine: StateFlow<String?> = _runningRoutine
     private val _alerts = MutableStateFlow<List<Alert>>(emptyList())
     val alerts: StateFlow<List<Alert>> = _alerts
     private val _showRoutines = MutableStateFlow(false)
@@ -142,6 +145,7 @@ object AgentHub {
         Lockdown.init(appContext)
         _routineItems.value = loadRoutineRuns()
         Routines.init(appContext)
+        NowState.init(appContext)
     }
 
     /**
@@ -234,6 +238,7 @@ object AgentHub {
                     val trigger = routine.describe() + if (late) " (late: the phone was off when it was due)" else ""
                     // What the user sees: the routine's name, if it has one, and its trigger.
                     val label = routine.name?.let { "$it · $trigger" } ?: trigger
+                    _runningRoutine.value = label
                     add(ChatItem.User(ids.incrementAndGet(), routine.prompt, source = label))
                     effectSource = Triple("routine", routine.id, label)
                     val text = buildString {
@@ -261,6 +266,7 @@ object AgentHub {
                 } finally {
                     lastRequestEnd = System.currentTimeMillis()
                     this@AgentHub.routine = null
+                    _runningRoutine.value = null
                     // Hand focus back to the real screen without pulling the chat in front of anything.
                     HiddenDisplay.restoreFocus()
                     HiddenDisplay.park()
