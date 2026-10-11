@@ -185,13 +185,14 @@ private fun voiceCommand(context: Context, command: String) {
             when {
                 command.startsWith("speak:") -> debugSpeak(context, command.removePrefix("speak:"))
                 command == "listen" -> debugListen(context)
+                command.startsWith("selftest") -> debugSelfTest(context, command.substringAfter(':', "Set a timer for ten minutes."))
                 command == "support" || command == "download" -> debugSupport(context, download = command == "download")
                 command == "stop" -> {
                     VoiceEngines.output(context).stop()
                     VoiceEngines.input(context).cancel()
                     "stopped"
                 }
-                else -> "unknown voice command '$command' (speak:<text>, listen, stop, support, download)"
+                else -> "unknown voice command '$command' (speak:<text>, listen, selftest[:<text>], stop, support, download)"
             }
         } catch (e: Exception) {
             "error: $e"
@@ -233,6 +234,45 @@ private suspend fun debugSupport(context: Context, download: Boolean): String {
         }
     } ?: "no answer from the recognisers in 15 s"
     return (if (download) "download:\n" else "support:\n") + report
+}
+
+/**
+ * Speech in, without a person: the phrase is synthesised to a file, then played through a MediaPlayer while listening.
+ * The player takes no audio focus, so the recogniser's focus request doesn't pause it the way it pauses TTS.
+ */
+private suspend fun debugSelfTest(context: Context, phrase: String): String = kotlinx.coroutines.coroutineScope {
+    val wav = java.io.File(context.cacheDir, "voice-selftest.wav")
+    val synthesised = kotlinx.coroutines.withTimeoutOrNull(20_000) {
+        kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { cont ->
+            var tts: android.speech.tts.TextToSpeech? = null
+            tts = android.speech.tts.TextToSpeech(context) { status ->
+                val engine = tts ?: return@TextToSpeech
+                if (status != android.speech.tts.TextToSpeech.SUCCESS) { engine.shutdown(); if (cont.isActive) cont.resumeWith(Result.success(false)); return@TextToSpeech }
+                engine.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
+                    override fun onStart(id: String?) {}
+                    override fun onDone(id: String?) { engine.shutdown(); if (cont.isActive) cont.resumeWith(Result.success(true)) }
+                    @Deprecated("Deprecated in Java")
+                    override fun onError(id: String?) { engine.shutdown(); if (cont.isActive) cont.resumeWith(Result.success(false)) }
+                })
+                engine.synthesizeToFile(phrase, null, wav, "selftest")
+            }
+        }
+    } == true
+    if (!synthesised || !wav.exists()) return@coroutineScope "selftest: synthesis failed"
+    val player = android.media.MediaPlayer().apply {
+        setAudioAttributes(android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
+        setDataSource(wav.path)
+        prepare()
+    }
+    val play = launch {
+        kotlinx.coroutines.delay(800)
+        player.start()
+    }
+    val heard = debugListen(context)
+    play.cancel()
+    player.release()
+    "selftest: phrase=\"$phrase\"\n$heard"
 }
 
 private suspend fun debugListen(context: Context): String = kotlinx.coroutines.coroutineScope {

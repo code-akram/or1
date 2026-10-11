@@ -263,9 +263,17 @@ ElevenLabs).
   out, abbreviations, initials and decimals kept, long ones cut at a comma) and queued one utterance each; `progress`
   carries the reply id, its sentences and the one being spoken. `level` is a synthetic envelope pulsed on word
   boundaries (`onRangeStart`), with a gentle wobble if the engine sends none, sampled at 10 Hz while speaking only.
+- On the RAVOZ the recogniser answered `checkRecognitionSupport` with error 14 (can't check) and every listen with 13
+  (language unavailable) until the English (US) pack (62 MB) was downloaded in Google's Speech Recognition and
+  Synthesis settings. That screen isn't exported; or1 opened it as root (`am start --display $OR1_DISPLAY -n
+  com.google.android.tts/com.google.android.libraries.speech.modelmanager.languagepack.settings.SettingsActivity`)
+  and tapped through "Add a language" on 2026-10-12. Since then `selftest` transcribes "Set a timer for 10 minutes"
+  in about 3 s.
 - Transient audio focus (`AudioFocus`, usage assistant) while listening or speaking, released after.
 - `<queries>` for `RecognitionService` and `TTS_SERVICE` in the manifest (targetSdk 33 package visibility).
-- Debug: `--es voice speak:<text>`, `--es voice listen` (one utterance; up to 20 s, then stop), `--es voice stop`,
+- Debug: `--es voice speak:<text>`, `--es voice listen` (one utterance; up to 20 s, then stop), `--es voice
+  selftest[:<text>]` (the phrase synthesised to a file and played through a MediaPlayer, which takes no audio focus,
+  while listening: speech in without a person), `--es voice stop`,
   `--es voice support` (each recogniser's languages and the chosen plan), `--es voice download` (triggers the model
   download where English isn't installed; progress in logcat on API 34). Results
   in `files/voice.txt` and logcat tag `or1-voice`: final text, peak level, partials, error, the recogniser service,
