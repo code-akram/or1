@@ -52,13 +52,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.or1.agent.ChatItem
-import com.or1.agent.Decision
 
 /** One request and everything it produced, so a turn's tool steps collapse into a single working card. */
 data class Turn(
     val user: ChatItem.User?,
     val steps: List<ChatItem>,          // Thinking and ToolCall, in order
-    val approvals: List<ChatItem.Approval>,
     val infos: List<ChatItem.Info>,
     val reply: ChatItem.Reply?,
     val draft: ChatItem.Draft? = null,
@@ -73,20 +71,18 @@ fun groupTurns(items: List<ChatItem>): List<Turn> {
     val turns = mutableListOf<Turn>()
     var user: ChatItem.User? = null
     val steps = mutableListOf<ChatItem>()
-    val approvals = mutableListOf<ChatItem.Approval>()
     val infos = mutableListOf<ChatItem.Info>()
     var reply: ChatItem.Reply? = null
     var draft: ChatItem.Draft? = null
     fun flush() {
-        if (user != null || steps.isNotEmpty() || approvals.isNotEmpty() || infos.isNotEmpty() || reply != null || draft != null) {
-            turns += Turn(user, steps.toList(), approvals.toList(), infos.toList(), reply, draft)
+        if (user != null || steps.isNotEmpty() || infos.isNotEmpty() || reply != null || draft != null) {
+            turns += Turn(user, steps.toList(), infos.toList(), reply, draft)
         }
-        user = null; steps.clear(); approvals.clear(); infos.clear(); reply = null; draft = null
+        user = null; steps.clear(); infos.clear(); reply = null; draft = null
     }
     for (item in items) when (item) {
         is ChatItem.User -> { flush(); user = item }
         is ChatItem.Thinking, is ChatItem.ToolCall -> steps += item
-        is ChatItem.Approval -> approvals += item
         is ChatItem.Info -> infos += item
         is ChatItem.Draft -> draft = item
         is ChatItem.Reply -> { reply = item; flush() }
@@ -196,22 +192,14 @@ fun WorkCard(turn: Turn, active: Boolean, preview: Bitmap?, onOpenPreview: () ->
                 Modifier.fillMaxWidth().clickable { expanded = !expanded },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                val waiting = active && turn.approvals.any { it.state == null }
-                if (waiting) {
-                    Box(Modifier.padding(4.dp).size(8.dp).clip(CircleShape).background(Palette.Accent))
-                } else if (active) {
+                if (active) {
                     CircularProgressIndicator(Modifier.size(16.dp), color = Palette.Accent, strokeWidth = 2.dp)
                 } else {
                     Icon(Icons.Check, null, tint = Palette.TextDim, modifier = Modifier.size(16.dp))
                 }
                 Spacer(Modifier.width(10.dp))
                 val count = if (calls.size == 1) "1 step" else "${calls.size} steps"
-                val title = when {
-                    waiting -> "Waiting for your OK"
-                    active -> "Working…"
-                    else -> count
-                }
-                Text(title, style = Type.Label, modifier = Modifier.weight(1f))
+                Text(if (active) "Working…" else count, style = Type.Label, modifier = Modifier.weight(1f))
                 Icon(if (expanded) Icons.ExpandLess else Icons.ExpandMore, null, tint = Palette.TextFaint, modifier = Modifier.size(20.dp))
             }
             if (!expanded) {
@@ -294,54 +282,6 @@ private fun Modifier.pulse(): Modifier {
         animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "alpha",
     )
     return alpha(alpha)
-}
-
-/** A change waiting for the user's OK: Allow / Always / Deny, then the decision. */
-@Composable
-fun ApprovalCard(item: ChatItem.Approval, onDecide: (Decision) -> Unit) {
-    val shape = RoundedCornerShape(20.dp)
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(Palette.Surface)
-            .border(1.dp, if (item.state == null) Palette.ApprovalBorder else Palette.Border, shape)
-            .padding(16.dp),
-    ) {
-        Text(item.label, style = Type.Label)
-        Spacer(Modifier.height(6.dp))
-        Text(item.detail, style = Type.Mono, maxLines = 4)
-        Spacer(Modifier.height(14.dp))
-        when (item.state) {
-            null -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                PillButton("Deny", Palette.Surface, Palette.TextDim) { onDecide(Decision.DENY) }
-                Spacer(Modifier.weight(1f))
-                PillButton("Always", Palette.SurfaceHigh, Palette.Text) { onDecide(Decision.ALWAYS) }
-                PillButton("Allow", Palette.Primary, Palette.OnPrimary) { onDecide(Decision.ALLOW) }
-            }
-            Decision.DENY -> DecisionLine(Icons.Close, "Denied", Palette.Error)
-            Decision.ALWAYS -> DecisionLine(
-                Icons.Check,
-                when {
-                    !item.forRoutine -> "Always allowed in this chat"
-                    // AgentHub never keeps a standing shell grant for a routine.
-                    item.detail.startsWith("shell ") -> "Allowed this once (never always for shell in a routine)"
-                    else -> "Always allowed for this routine"
-                },
-                Palette.Success,
-            )
-            Decision.ALLOW -> DecisionLine(Icons.Check, "Allowed", Palette.Success)
-        }
-    }
-}
-
-@Composable
-private fun DecisionLine(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, tint: androidx.compose.ui.graphics.Color) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, tint = tint, modifier = Modifier.size(16.dp))
-        Spacer(Modifier.width(8.dp))
-        Text(text, style = Type.Step)
-    }
 }
 
 @Composable

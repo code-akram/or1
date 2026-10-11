@@ -67,16 +67,25 @@ class RoutinesTest {
         assertThrows(IllegalArgumentException::class.java) { at("08:00", "once", date = "2026-10-01") }
     }
 
-    @Test fun editingKeepsAlwaysAnswersAndWeeklyDay() {
-        val old = at("10:00", "weekly", date = "2026-10-14").copy(allowed = setOf("device:set"), lastRun = 42)
+    @Test fun editingKeepsLastRunAndWeeklyDay() {
+        val old = at("10:00", "weekly", date = "2026-10-14").copy(lastRun = 42)
         val edited = parseRoutine(JSONObject().put("prompt", "q").put("at", "11:30").put("repeat", "weekly"), "id", saturday, keep = old)
-        assertEquals(setOf("device:set"), edited.allowed)
         assertEquals(42L, edited.lastRun)
         assertEquals(3, edited.weekday)
     }
 
+    @Test fun nameIsKeptOnEditUnlessGivenAndBlankClearsIt() {
+        val old = at("10:00", "daily").copy(name = "Standup")
+        val args = { JSONObject().put("prompt", "q").put("at", "10:30").put("repeat", "daily") }
+        assertEquals("Standup", parseRoutine(args(), "id", saturday, keep = old).name)
+        assertEquals("Lunch", parseRoutine(args().put("name", " Lunch "), "id", saturday, keep = old).name)
+        assertEquals(null, parseRoutine(args().put("name", " "), "id", saturday, keep = old).name)
+        assertEquals("Standup", old.title)
+        assertEquals(old.describe(), old.copy(name = null).title)
+    }
+
     @Test fun jsonRoundTrip() {
-        val r = Routine("abc123", "p", app = "Messaging", textContains = "Sam", allowed = setOf("clock:set_timer"), lastRun = 7)
+        val r = Routine("abc123", "p", app = "Messaging", textContains = "Sam", lastRun = 7, name = "Sam's messages")
         assertEquals(r, Routine.fromJson(JSONObject(r.toJson().toString())))
         val t = at("07:15", "weekdays")
         assertEquals(t, Routine.fromJson(JSONObject(t.toJson().toString())))

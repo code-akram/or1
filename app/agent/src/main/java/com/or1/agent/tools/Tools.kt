@@ -6,8 +6,6 @@ import org.json.JSONObject
 /** A tool result: text, optionally with a screenshot (base64 JPEG). */
 data class ToolOutput(val text: String, val jpegBase64: String? = null)
 
-val NAVIGATION_KEYS = setOf("back", "home", "recents", "wake")
-
 /** Dispatches tool calls to their implementations. Schemas live in assets/agent.json. */
 class Tools(context: Context) {
     private val system = SystemTools(context)
@@ -16,25 +14,6 @@ class Tools(context: Context) {
     private val memory = MemoryTool(context)
     private val calendar = CalendarTool(context)
     private val contacts = ContactsTool(context)
-
-    /**
-     * Reads and navigation run freely; anything that changes state needs the user's OK. Same rules as proto.
-     * `open` with a URI is gated too: a URI can carry data out (https://…?q=<notes>) if untrusted text steers the
-     * agent, and some act on their own; opening an app or a settings page can't. See also AgentHub.mustApprove.
-     */
-    fun needsApproval(name: String, args: JSONObject): Boolean = when (name) {
-        "screen", "notifications", "apps", "memory" -> false
-        "open" -> args.optString("uri").isNotBlank()
-        "device" -> args.optString("action") == "set"
-        "clock" -> args.optString("action") != "next_alarm"
-        "calendar", "routines" -> args.optString("action") != "list"
-        "contacts" -> args.optString("action") != "find"
-        "act" -> {
-            val action = args.optString("action")
-            !(action == "scroll" || (action == "key" && args.optString("key") in NAVIGATION_KEYS))
-        }
-        else -> true
-    }
 
     fun elementLabel(id: Int): String = screen.labelOf(id)
 

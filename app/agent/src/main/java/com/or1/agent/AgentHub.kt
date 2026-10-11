@@ -11,7 +11,6 @@ import com.or1.agent.ui.StepLabels
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -36,29 +35,17 @@ sealed interface ChatItem {
     data class Thinking(override val id: Long, val text: String) : ChatItem
     /** `label` is plain language ("Set media volume to 3"); `detail` is the raw call. */
     data class ToolCall(override val id: Long, val label: String, val detail: String, val result: String? = null, val isError: Boolean = false) : ChatItem
-    /** `forRoutine`: asked during a routine run, so Always applies to that routine rather than the chat. */
-    data class Approval(
-        override val id: Long, val label: String, val detail: String,
-        val decision: CompletableDeferred<Decision>, val state: Decision? = null, val forRoutine: Boolean = false,
-    ) : ChatItem
     data class Info(override val id: Long, val text: String) : ChatItem
     /** The reply as it streams in; replaced by the [Reply] when it's complete, dropped if the model calls a tool. */
     data class Draft(override val id: Long, val text: String) : ChatItem
 }
 
-enum class Decision { ALLOW, DENY, ALWAYS }
-
-/**
- * Shown at the top of the chat: with the system UI locked down (see [Lockdown]), this is how routines reach the user.
- * `approvalId` is set while a routine waits on that approval.
- */
-data class Alert(val id: Long, val text: String, val approvalId: Long? = null)
+/** Shown at the top of the chat: with the system UI locked down (see [Lockdown]), this is how routines reach the user. */
+data class Alert(val id: Long, val text: String)
 
 /** Process-wide owner of the agent: runs one request at a time and publishes chat items for the UI. */
 object AgentHub {
     private const val TAG = "or1"
-    /** How long a routine waits for an approval before treating it as declined. */
-    private const val APPROVAL_TIMEOUT_MS = 15 * 60_000L
     private const val ROUTINE_ITEMS_KEPT = 300
     private const val ROUTINE_TRANSCRIPTS = "routine-transcripts"
     /** A chat idle this long starts afresh: it matches the prompt cache's 1-hour TTL, past which the whole history
@@ -71,7 +58,6 @@ object AgentHub {
     private val ids = AtomicLong()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val lock = Mutex()
-    private val alwaysAllowed = mutableSetOf<String>()
 
     private val _items = MutableStateFlow<List<ChatItem>>(emptyList())
     val items: StateFlow<List<ChatItem>> = _items
@@ -111,10 +97,7 @@ object AgentHub {
         AnthropicOkHttpClient.builder().apiKey(key).build()
     }
     private var current: Job? = null
-    private var autoApprove = false
-    /** Eval only: decline every approval, for judgement checks where the right move is to stop and ask. */
-    private var autoDeny = false
-    /** The routine being run, if this request came from one (its approvals are scoped to it). */
+    /** The routine being run, if this request came from one (its items go to the routines thread). */
     @Volatile
     private var routine: Routine? = null
     /** When the last request of any kind (chat, routine, eval) and the last request in this chat ended (ms). */
@@ -170,6 +153,9 @@ object AgentHub {
         return Agent(client, config, tools, hooks, transcript).also { agent = it; agentConfig = config }
     }
 
+    /** The transcript of the chat in progress, if it has started. */
+    fun currentChatFile(): File? = agent?.transcriptFile
+
     /** Routines get their own agent and transcripts (not listed with past chats); each run starts fresh. */
     private fun routineAgent(): Agent {
         routineAgent?.let { return it }
@@ -178,14 +164,12 @@ object AgentHub {
     }
 
     /** Queue a user message. `requestId` makes the reply readable from replies.jsonl (debug driver). */
-    fun submit(text: String, requestId: String? = null, autoApprove: Boolean = false, fresh: Boolean = false, autoDeny: Boolean = false) {
+    fun submit(text: String, requestId: String? = null, fresh: Boolean = false) {
         if (_routineBusy.value) _items.update { it + ChatItem.Info(ids.incrementAndGet(), "A routine is running. Your request starts when it's done.") }
         scope.launch {
             lock.withLock {
                 // Set once it runs, not when queued, so Stop cancels the request in progress.
                 current = coroutineContext[Job]
-                this@AgentHub.autoApprove = autoApprove
-                this@AgentHub.autoDeny = autoDeny
                 // Eval requests (requestId) share one transcript, so they don't flood the drawer's past chats.
                 if (fresh) newConversation(newTranscript = requestId == null)
                 val idle = lastChatEnd > 0 && System.currentTimeMillis() - lastChatEnd > AUTO_NEW_CHAT_MS
@@ -209,8 +193,7 @@ object AgentHub {
     }
 
     /**
-     * Run a routine in its own thread, as a fresh conversation. The user may not be looking: approvals also go out as
-     * notifications (with Allow/Deny buttons) and lapse after [APPROVAL_TIMEOUT_MS], and the reply is posted as a
+     * Run a routine in its own thread, as a fresh conversation. The user may not be looking: the reply is posted as a
      * notification. `notification` is the triggering notification's content, passed to the model as untrusted data.
      */
     fun submitRoutine(routine: Routine, late: Boolean, notification: String?) {
@@ -219,12 +202,12 @@ object AgentHub {
                 val pm = appContext.getSystemService(android.os.PowerManager::class.java)
                 val wake = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "or1:routine").apply { acquire(15 * 60_000L) }
                 try {
-                    autoApprove = false
-                    autoDeny = false
-                        this@AgentHub.routine = routine
+                    this@AgentHub.routine = routine
                     current = coroutineContext[Job]
                     val trigger = routine.describe() + if (late) " (late: the phone was off when it was due)" else ""
-                    add(ChatItem.User(ids.incrementAndGet(), routine.prompt, source = trigger))
+                    // What the user sees: the routine's name, if it has one, and its trigger.
+                    val label = routine.name?.let { "$it · $trigger" } ?: trigger
+                    add(ChatItem.User(ids.incrementAndGet(), routine.prompt, source = label))
                     val text = buildString {
                         append("[Routine ${routine.id}: ${trigger.replaceFirstChar { it.lowercase() }}. The user set this up earlier and ")
                         append("may not be looking at the phone; your reply is shown to them as a notification, so make it self-contained.]\n")
@@ -245,8 +228,8 @@ object AgentHub {
                     routineTranscript.log(
                         JSONObject().put("routine_reply", JSONObject().put("text", outcome.reply).put("cost", outcome.cost).put("seconds", outcome.seconds))
                     )
-                    Notifier.reply(trigger, outcome.reply)
-                    alert(Alert(ids.incrementAndGet(), "$trigger: ${outcome.reply}"))
+                    Notifier.reply(label, outcome.reply)
+                    alert(Alert(ids.incrementAndGet(), "$label: ${outcome.reply}"))
                 } finally {
                     lastRequestEnd = System.currentTimeMillis()
                     this@AgentHub.routine = null
@@ -332,6 +315,13 @@ object AgentHub {
         current?.cancel()
     }
 
+    /** The user started using the work screen while or1 was working on it: stop, and say so in the chat. */
+    fun takeOver() {
+        if (!_busy.value) return
+        current?.cancel()
+        _items.update { it + ChatItem.Info(ids.incrementAndGet(), "You took over the work screen. Ask or1 when you want it to carry on.") }
+    }
+
     fun setEffort(level: String) {
         _effort.value = level
         agentConfig?.effort = level
@@ -352,17 +342,6 @@ object AgentHub {
         lastChatEnd = 0
         _items.value = emptyList()
         _conversation.value++
-        alwaysAllowed.clear()
-    }
-
-    fun decide(item: ChatItem.Approval, decision: Decision) {
-        item.decision.complete(decision)
-    }
-
-    /** From a notification's Allow/Deny/Always button: answer the pending approval with this id, if still open. */
-    fun decide(itemId: Long, decision: Decision) {
-        (_items.value + _routineItems.value).firstOrNull { it.id == itemId && it is ChatItem.Approval && it.state == null }
-            ?.let { (it as ChatItem.Approval).decision.complete(decision) }
     }
 
     /**
@@ -388,15 +367,11 @@ object AgentHub {
 
     fun dismissAlert(id: Long) = _alerts.update { list -> list.filterNot { it.id == id } }
 
-    /** Clears the routine results (pending approvals stay until answered). */
-    fun clearAlerts() = _alerts.update { list -> list.filter { it.approvalId != null } }
+    fun clearAlerts() = _alerts.update { emptyList() }
 
-    /** Adds an alert with a chime; keeps the three newest results (pending approvals always stay). */
+    /** Adds an alert with a chime; keeps the three newest. */
     private fun alert(alert: Alert) {
-        _alerts.update { list ->
-            val results = (list.filter { it.approvalId == null } + listOfNotNull(alert.takeIf { it.approvalId == null })).takeLast(3)
-            list.filter { it.approvalId != null } + listOfNotNull(alert.takeIf { it.approvalId != null }) + results
-        }
+        _alerts.update { list -> (list + alert).takeLast(3) }
         Notifier.chime()
     }
 
@@ -409,40 +384,6 @@ object AgentHub {
     }
 
     private val hooks = object : AgentHooks {
-        override suspend fun approve(tool: String, args: JSONObject): Boolean {
-            val key = "$tool:${args.optString("action")}"
-            val routine = routine
-            // A routine only uses its own Always answers, not the chat's: it may be acting on a notification's text.
-            if (autoApprove || key in (routine?.let { Routines.get(it.id)?.allowed } ?: alwaysAllowed)) return true
-            val item = ChatItem.Approval(ids.incrementAndGet(), label(tool, args), tools.describe(tool, args), CompletableDeferred(), forRoutine = routine != null)
-            if (autoDeny) {
-                add(item.copy(state = Decision.DENY))
-                return false
-            }
-            add(item)
-            val decision = if (routine == null) item.decision.await() else {
-                Notifier.approvalNeeded(item.id, routine.prompt, item.label)
-                alert(Alert(ids.incrementAndGet(), "A routine is waiting for your OK: ${item.label}", approvalId = item.id))
-                try {
-                    withTimeoutOrNull(APPROVAL_TIMEOUT_MS) { item.decision.await() } ?: Decision.DENY
-                } finally {
-                    Notifier.cancel(item.id)
-                    _alerts.update { list -> list.filterNot { it.approvalId == item.id } }
-                }
-            }
-            if (decision == Decision.ALWAYS) {
-                // Never a standing shell grant for a routine: any command would then run unasked.
-                if (routine == null) alwaysAllowed += key
-                else if (tool != "shell") Routines.update(routine.id) { it.copy(allowed = it.allowed + key) }
-            }
-            replace(item.id) { (it as ChatItem.Approval).copy(state = decision) }
-            return decision != Decision.DENY
-        }
-
-        // A routine may be acting on a notification's text: a memory note it writes would steer every later chat.
-        override fun mustApprove(tool: String, args: JSONObject) =
-            routine != null && tool == "memory" && args.optString("action") != "view"
-
         override fun thinking(text: String) = add(ChatItem.Thinking(ids.incrementAndGet(), text.trim()))
 
         override fun partial(text: String) {
@@ -517,8 +458,11 @@ object AgentHub {
      * this mostly gives the chat back input focus (the hidden display takes it whenever the agent acts there).
      */
     private fun returnToComposer() {
+        // Always the real screen: a launch without a display goes to the focused one, which is the work screen while
+        // the user drives it, and the chat would move over there.
         appContext.startActivity(
-            Intent(appContext, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            Intent(appContext, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT),
+            android.app.ActivityOptions.makeBasic().setLaunchDisplayId(android.view.Display.DEFAULT_DISPLAY).toBundle(),
         )
     }
 }

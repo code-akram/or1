@@ -1,6 +1,6 @@
 """Run the task list one fresh conversation at a time and record success, steps and cost.
 
-Approvals stay interactive unless --auto-approve is given. On the phone, tasks with a machine check
+The agent acts without asking. On the phone, tasks with a machine check
 (checks.py) are judged automatically; the rest by the person watching the phone (or scrcpy).
 """
 
@@ -21,16 +21,14 @@ PHONE_PKG = "com.or1.agent"
 PHONE_TIMEOUT = 600
 
 
-def run_on_phone(task: str, request_id: str, auto_approve: bool, auto_deny: bool = False) -> dict:
-    """Send one task to the on-device agent through its debug receiver and wait for its reply record. `auto_deny`
-    declines every approval (judgement checks) and wins over `auto_approve`."""
+def run_on_phone(task: str, request_id: str) -> dict:
+    """Send one task to the on-device agent through its debug receiver and wait for its reply record."""
     # Screen actions fail on the lock screen; the test phone has a swipe-only keyguard. Home brings the chat (the HOME
     # app) back in front, e.g. after a reinstall killed it, so every task starts from the same screen.
     adb.shell("input keyevent KEYCODE_WAKEUP; wm dismiss-keyguard; input keyevent KEYCODE_HOME")
     adb.shell(
         f"am broadcast -n {PHONE_PKG}/.DebugReceiver --es text {shlex.quote(task)} --es id {request_id} "
-        f"--ez fresh true --ez auto_approve {'true' if auto_approve and not auto_deny else 'false'} "
-        f"--ez auto_deny {'true' if auto_deny else 'false'}"
+        "--ez fresh true"
     )
     deadline = time.time() + PHONE_TIMEOUT
     while time.time() < deadline:
@@ -43,8 +41,7 @@ def run_on_phone(task: str, request_id: str, auto_approve: bool, auto_deny: bool
 
 def cleanup_phone_clock() -> None:
     """Undo task side effects: timers and alarms must not ring later (Clock holds only test data on this phone), the
-    test contact (and any empty one the agent made on the way), calendar event, routines and notifications go, and Gallery comes back if the uninstall judgement check
-    was auto-approved."""
+    test contact (and any empty one the agent made on the way), calendar event, routines and notifications go, and Gallery comes back after the uninstall task."""
     for r in checks.test_routines():
         args = shlex.quote(json.dumps({"action": "remove", "id": r["id"]}))
         adb.shell(f"am broadcast -n {PHONE_PKG}/.DebugReceiver --es display tool --es name routines --es args {args} >/dev/null")
@@ -56,7 +53,7 @@ def cleanup_phone_clock() -> None:
               "--where \"display_name='Test Person' OR (display_name IS NULL AND (account_type IS NULL OR account_type='null'))\"; "
               "content delete --uri 'content://com.android.calendar/events?caller_is_syncadapter=true"
               "&account_name=Phone&account_type=LOCAL' --where \"title='Dentist'\"; "
-              "pm install-existing --user 0 com.android.gallery3d >/dev/null")
+              "pm install-existing --user 0 com.android.gallery3d >/dev/null; pm enable com.android.gallery3d >/dev/null")
 
 
 def main() -> None:
@@ -65,7 +62,6 @@ def main() -> None:
     parser.add_argument("--effort", default="medium")
     parser.add_argument("--tasks", type=Path, default=TASKS_FILE)
     parser.add_argument("--only", help="comma-separated task numbers to run (1-based)")
-    parser.add_argument("--auto-approve", action="store_true", help="approve every change without asking")
     parser.add_argument("--no-judge", action="store_true", help="skip the y/n prompt; judge later from the logs")
     parser.add_argument("--target", choices=["host", "phone"], default="host",
                         help="host: this prototype drives the phone over ADB; phone: the on-device agent app")
@@ -88,11 +84,11 @@ def main() -> None:
             check = checks.CHECKS.get(task) if args.target == "phone" else None
             snapshot = check.before() if check and check.before else None
             if args.target == "phone":
-                r = run_on_phone(task, f"eval-{int(time.time())}-{i}", args.auto_approve, auto_deny=bool(check and check.deny))
+                r = run_on_phone(task, f"eval-{int(time.time())}-{i}")
                 reply, seconds = r["reply"], r["seconds"]
                 usage = {"requests": r["requests"], "cost": round(r["cost"], 5), "output_tokens": None, "log": "phone"}
             else:
-                agent = Agent(hooks=make_hooks(args.auto_approve), model=args.model, effort=args.effort)
+                agent = Agent(hooks=make_hooks(), model=args.model, effort=args.effort)
                 started = time.time()
                 try:
                     reply = agent.send(task)

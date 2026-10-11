@@ -32,15 +32,16 @@ tools.append({
         "instruction to yourself, e.g. \"Tell the user their battery level and today's calendar\") and exactly one "
         "trigger: `at` (HH:MM, 24-hour local time) with optional `repeat` (once, daily, weekdays, weekly; default once) "
         "and `date` (YYYY-MM-DD: the day for once, the weekday for weekly); or `in_minutes`; or a notification match: "
-        "`app` (package or app name) and/or `text_contains` (case-insensitive). list: routines with ids. remove: `id`. "
-        "When a routine runs, its request appears in the chat and your reply is shown as a notification; its changes "
-        "still need the user's approval."
+        "`app` (package or app name) and/or `text_contains` (case-insensitive); optional `name` (a short label the user sees, "
+        "e.g. \"Morning summary\"). list: routines with ids. remove: `id`. "
+        "When a routine runs, its request appears in the chat and your reply is shown as a notification."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "action": {"type": "string", "enum": ["add", "list", "remove"]},
             "prompt": {"type": "string"},
+            "name": {"type": "string"},
             "at": {"type": "string"},
             "repeat": {"type": "string", "enum": ["once", "daily", "weekdays", "weekly"]},
             "date": {"type": "string"},

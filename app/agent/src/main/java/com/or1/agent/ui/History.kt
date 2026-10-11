@@ -21,30 +21,57 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.or1.agent.AgentHub
 import com.or1.agent.ChatItem
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Locale
 import org.json.JSONObject
 
-/** A past conversation, from files/transcripts/<yyyyMMdd-HHmmss>.jsonl. */
-data class PastChat(val file: File, val title: String, val time: String)
+/** A past conversation, from files/transcripts/<yyyyMMdd-HHmmss>.jsonl. `renamed`: the title is the user's. */
+data class PastChat(val file: File, val title: String, val time: String, val renamed: Boolean = false)
 
 object History {
     private val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
     private val shown = SimpleDateFormat("EEE d MMM, HH:mm", Locale.US)
 
-    fun list(context: Context, limit: Int = 30): List<PastChat> =
-        File(context.filesDir, "transcripts").listFiles { f -> f.name.endsWith(".jsonl") }.orEmpty()
+    /** Titles the user gave chats, by transcript file name (otherwise a chat is titled by its first message). */
+    private fun titlesFile(context: Context) = File(context.filesDir, "chat-titles.json")
+
+    private fun titles(context: Context): JSONObject =
+        runCatching { JSONObject(titlesFile(context).readText()) }.getOrDefault(JSONObject())
+
+    fun list(context: Context, limit: Int = 30): List<PastChat> {
+        val titles = titles(context)
+        return File(context.filesDir, "transcripts").listFiles { f -> f.name.endsWith(".jsonl") }.orEmpty()
             .sortedByDescending { it.name }
             .take(limit)
             .mapNotNull { file ->
-                val title = file.useLines { lines ->
+                val first = file.useLines { lines ->
                     lines.firstNotNullOfOrNull { runCatching { JSONObject(it).optString("user").ifEmpty { null } }.getOrNull() }
                 } ?: return@mapNotNull null
                 val time = runCatching { shown.format(stamp.parse(file.nameWithoutExtension)!!) }.getOrDefault("")
-                PastChat(file, title, time)
+                val given = titles.optString(file.name).ifBlank { null }
+                PastChat(file, given ?: first, time, renamed = given != null)
             }
+    }
+
+    /** A blank title goes back to the first message. */
+    @Synchronized
+    fun rename(context: Context, chat: PastChat, title: String) {
+        val titles = titles(context)
+        if (title.isBlank()) titles.remove(chat.file.name) else titles.put(chat.file.name, title.trim())
+        titlesFile(context).writeText(titles.toString())
+    }
+
+    /** Deletes the transcript; the chat in progress is closed first, so it doesn't write the file back. */
+    @Synchronized
+    fun delete(context: Context, chat: PastChat) {
+        if (AgentHub.currentChatFile() == chat.file) AgentHub.newConversation()
+        chat.file.delete()
+        val titles = titles(context)
+        if (titles.remove(chat.file.name) != null) titlesFile(context).writeText(titles.toString())
+    }
 
     /** The user messages and the agent's text replies, for read-only viewing. */
     fun load(chat: PastChat): List<ChatItem> {

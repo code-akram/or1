@@ -1,4 +1,4 @@
-"""The agent's tools: schemas sent to Claude, their executors, and which calls need approval.
+"""The agent's tools: schemas sent to Claude and their executors.
 
 Phase 0 runs everything through `adb shell` (uid shell). On the phone the same
 commands will run from the privileged agent with root.
@@ -20,7 +20,6 @@ KEYS = {
     "back": "KEYCODE_BACK", "home": "KEYCODE_HOME", "recents": "KEYCODE_APP_SWITCH",
     "enter": "KEYCODE_ENTER", "delete": "KEYCODE_DEL", "wake": "KEYCODE_WAKEUP", "sleep": "KEYCODE_SLEEP",
 }
-NAVIGATION_KEYS = {"back", "home", "recents", "wake"}
 
 TOOLS = [
     {
@@ -223,35 +222,6 @@ TOOLS = [
         },
     },
 ]
-
-
-def needs_approval(name: str, args: dict) -> bool:
-    """Reads and navigation run freely; anything that changes state needs the user's OK. `open` with a URI is gated:
-    a URI can carry data out (https://...?q=<notes>) if untrusted text steers the agent; an app or settings page can't."""
-    if name in ("screen", "notifications", "apps", "memory"):
-        return False
-    if name == "open":
-        return bool(args.get("uri"))
-    if name == "device":
-        return args.get("action") == "set"
-    if name == "clock":
-        return args.get("action") != "next_alarm"
-    if name in ("calendar", "routines"):
-        return args.get("action") != "list"
-    if name == "contacts":
-        return args.get("action") != "find"
-    if name == "act":
-        action = args.get("action")
-        return not (action == "scroll" or (action == "key" and args.get("key") in NAVIGATION_KEYS))
-    return True
-
-
-def describe(name: str, args: dict) -> str:
-    """One-line human summary of a call, shown in the approval prompt."""
-    if name == "act" and args.get("element") in screen.last_elements:
-        el = screen.last_elements[args["element"]]
-        args = {**args, "element": f"{args['element']} ({el.label[:40]})"}
-    return f"{name} " + " ".join(f"{k}={v!r}" for k, v in args.items())
 
 
 def _after_action() -> str | list:

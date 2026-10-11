@@ -26,8 +26,7 @@ object StepLabels {
                 args.optString("package").isNotBlank() -> "Opened ${appName(args.getString("package"))}"
                 args.optString("settings_action").isNotBlank() ->
                     "Opened ${args.getString("settings_action").substringAfterLast('.').replace('_', ' ').lowercase()}"
-                // Imperative: it's asked for approval first.
-                else -> "Open ${args.optString("uri").take(60)}"
+                else -> "Opened ${args.optString("uri").take(60)}"
             }
             "device" -> if (action == "get") "Checked device status" else {
                 val setting = args.optString("setting")

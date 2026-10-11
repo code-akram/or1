@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -45,9 +46,8 @@ import com.or1.agent.tools.HiddenDisplay
 import org.json.JSONObject
 
 /**
- * The routines the user has set up (ask the agent to add one; edit or remove them here, and revoke the Always answers
- * a routine has collected) and their recent runs, which have their own thread so they don't interleave with the chat.
- * Approvals a run waits on are answered here too, and a run can be carried into the chat to follow up on.
+ * The routines the user has set up (ask the agent to add one; edit or remove them here) and their recent runs, which
+ * have their own thread so they don't interleave with the chat. A run can be carried into the chat to follow up on.
  */
 @Composable
 fun RoutinesView(onClose: () -> Unit, onOpenPreview: () -> Unit) {
@@ -59,6 +59,9 @@ fun RoutinesView(onClose: () -> Unit, onOpenPreview: () -> Unit) {
     val preview by HiddenDisplay.preview.collectAsState()
     val turns = remember(items) { groupTurns(items) }
     var editing by remember { mutableStateOf<String?>(null) }
+    var renaming by remember { mutableStateOf<String?>(null) }
+    // Removed from the list at once; the routine goes when the Undo pill does.
+    var pending by remember { mutableStateOf<PendingDelete?>(null) }
     val list = rememberLazyListState()
     // Header + routines + "Recent runs" come first; follow the latest run as it grows.
     LaunchedEffect(items.size, items.lastOrNull()) {
@@ -70,6 +73,7 @@ fun RoutinesView(onClose: () -> Unit, onOpenPreview: () -> Unit) {
             Spacer(Modifier.width(12.dp))
             Text("Routines", style = Type.Label)
         }
+        Box(Modifier.fillMaxSize()) {
         LazyColumn(
             Modifier.fillMaxSize(),
             state = list,
@@ -85,11 +89,24 @@ fun RoutinesView(onClose: () -> Unit, onOpenPreview: () -> Unit) {
                     )
                 }
             }
-            items(routines, key = { "routine-${it.id}" }) { routine ->
-                if (editing == routine.id) {
-                    RoutineEditor(routine, onDone = { editing = null })
-                } else {
-                    RoutineRow(routine, onEdit = { editing = routine.id })
+            items(routines.filter { it.id != pending?.key }, key = { "routine-${it.id}" }) { routine ->
+                when (routine.id) {
+                    editing -> RoutineEditor(routine, onDone = { editing = null })
+                    renaming -> InlineRename(
+                        initial = routine.name.orEmpty(), placeholder = routine.describe(), style = Type.Label,
+                        onDone = { Routines.rename(routine.id, it); renaming = null },
+                        modifier = Modifier.fillMaxWidth().animateItem(),
+                    )
+                    else -> RoutineRow(
+                        routine,
+                        onEdit = { editing = routine.id },
+                        onRename = { renaming = routine.id },
+                        onDelete = {
+                            pending?.commit?.invoke()
+                            pending = PendingDelete(routine.id, "Routine deleted") { Routines.remove(routine.id) }
+                        },
+                        modifier = Modifier.animateItem(),
+                    )
                 }
             }
             if (turns.isNotEmpty()) {
@@ -111,31 +128,44 @@ fun RoutinesView(onClose: () -> Unit, onOpenPreview: () -> Unit) {
                 }
             }
         }
+        UndoBar(
+            pending,
+            onUndo = { pending = null },
+            onExpired = { pending?.commit?.invoke(); pending = null },
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp),
+        )
+        }
     }
 }
 
 @Composable
-private fun RoutineRow(routine: Routine, onEdit: () -> Unit) {
+private fun RoutineRow(routine: Routine, onEdit: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit, modifier: Modifier = Modifier) {
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Palette.Surface).clickable(onClick = onEdit)
-            .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 6.dp),
+        modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Palette.Surface).clickable(onClick = onEdit)
+            .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(routine.describe(), style = Type.Label)
+            Text(routine.title, style = Type.Label)
+            if (routine.name != null) Text(routine.describe(), style = Type.Caption)
             Text(routine.prompt, style = Type.Step, maxLines = 3)
-            if (routine.allowed.isNotEmpty()) {
-                Text("Always allowed: ${routine.allowed.sorted().joinToString { grantLabel(it) }}", style = Type.Caption)
-            }
         }
-        IconCircle(Icons.Close, "Remove routine", { Routines.remove(routine.id) }, tint = Palette.TextDim, background = Color.Transparent)
+        RowMenu(
+            listOf(
+                MenuAction("Rename", Icons.Rename, onClick = onRename),
+                MenuAction("Edit", Icons.Routine, onClick = onEdit),
+                MenuAction("Delete", Icons.Delete, destructive = true, onClick = onDelete),
+            ),
+            label = "Routine options",
+        )
     }
 }
 
-/** Edits the request and trigger in place; Always answers can be revoked here. */
+/** Edits the name, request and trigger in place. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RoutineEditor(routine: Routine, onDone: () -> Unit) {
+    var name by remember { mutableStateOf(routine.name.orEmpty()) }
     var prompt by remember { mutableStateOf(routine.prompt) }
     var at by remember { mutableStateOf(if (routine.hour >= 0) "%02d:%02d".format(routine.hour, routine.minute) else "") }
     var repeat by remember { mutableStateOf(routine.repeat) }
@@ -147,6 +177,7 @@ private fun RoutineEditor(routine: Routine, onDone: () -> Unit) {
             .border(1.dp, Palette.Border, RoundedCornerShape(16.dp)).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        Field("Name (optional)", name, { name = it })
         Field("What to do", prompt, { prompt = it }, singleLine = false)
         if (routine.onNotification) {
             Field("From app (package or name)", app, { app = it })
@@ -165,27 +196,11 @@ private fun RoutineEditor(routine: Routine, onDone: () -> Unit) {
                 }
             }
         }
-        if (routine.allowed.isNotEmpty()) {
-            Text("Always allowed (tap to revoke)", style = Type.Caption)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (key in routine.allowed.sorted()) {
-                    Row(
-                        Modifier.clip(CircleShape).background(Palette.SurfaceHigh).clickable { Routines.revoke(routine.id, key) }
-                            .padding(start = 14.dp, end = 10.dp, top = 8.dp, bottom = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(grantLabel(key), style = Type.Chip)
-                        Spacer(Modifier.width(6.dp))
-                        Icon(Icons.Close, "Revoke", tint = Palette.TextDim, modifier = Modifier.size(14.dp))
-                    }
-                }
-            }
-        }
         error?.let { Text(it, style = Type.Caption.copy(color = Palette.Error)) }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.align(Alignment.End)) {
             PillButton("Cancel", Palette.Surface, Palette.TextDim, onDone)
             PillButton("Save", Palette.Primary, Palette.OnPrimary) {
-                val args = JSONObject().put("prompt", prompt.trim())
+                val args = JSONObject().put("prompt", prompt.trim()).put("name", name.trim())
                 if (routine.onNotification) {
                     args.put("app", app.trim()).put("text_contains", contains.trim())
                 } else {
@@ -218,6 +233,3 @@ private fun Field(label: String, value: String, onValue: (String) -> Unit, singl
         ),
     )
 }
-
-/** "device:set" -> "device set". */
-private fun grantLabel(key: String) = key.split(':').filter { it.isNotBlank() }.joinToString(" ")

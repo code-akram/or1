@@ -2,11 +2,6 @@ package com.or1.agent.ui
 
 import android.os.SystemClock
 import android.widget.Toast
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -32,6 +27,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,24 +37,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isShiftPressed
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.or1.agent.tools.HiddenDisplay
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.drop
@@ -72,8 +59,7 @@ private enum class PrimaryAction { VOICE, SEND, STOP }
  */
 @Composable
 fun Composer(
-    text: String,
-    onText: (String) -> Unit,
+    input: ComposerInput,
     busy: Boolean,
     expanded: Boolean,
     onExpand: (Boolean) -> Unit,
@@ -86,9 +72,10 @@ fun Composer(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val hasText = input.hasText
     val action = when {
         busy -> PrimaryAction.STOP
-        text.isNotBlank() -> PrimaryAction.SEND
+        hasText -> PrimaryAction.SEND
         else -> PrimaryAction.VOICE
     }
     val onPrimary = {
@@ -100,12 +87,10 @@ fun Composer(
     }
     val onMic = { Toast.makeText(context, "Voice is coming soon", Toast.LENGTH_SHORT).show() }
 
-    AnimatedContent(
-        targetState = expanded,
-        transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(120)) },
-        modifier = modifier,
-        label = "composer",
-    ) { isExpanded ->
+    // A plain swap, not AnimatedContent: the card's native field (an AndroidView) isn't redrawn when it comes back
+    // inside a fading layer. The keyboard sliding in is the transition.
+    Box(modifier) {
+        val isExpanded = expanded || hasText
         if (!isExpanded) {
             // Pill: + · placeholder · mic · round button.
             Row(
@@ -121,8 +106,8 @@ fun Composer(
             ) {
                 PlusButton(onPlusAction, background = Color.Transparent)
                 Text(
-                    text.ifBlank { "Ask or1…" },
-                    style = Type.Input.copy(color = if (text.isBlank()) Palette.Placeholder else Palette.Text),
+                    "Ask or1…",
+                    style = Type.Input.copy(color = Palette.Placeholder),
                     maxLines = 1,
                     modifier = Modifier.weight(1f).padding(horizontal = 6.dp),
                 )
@@ -131,7 +116,7 @@ fun Composer(
                 PrimaryButton(action, onPrimary)
             }
         } else {
-            ComposerCard(text, onText, action, onPrimary, onMic, onExpand, model, effort, onEffort, onSend, onPlusAction)
+            ComposerCard(input, action, onPrimary, onMic, onExpand, model, effort, onEffort, onSend, onPlusAction)
         }
     }
 }
@@ -139,8 +124,7 @@ fun Composer(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ComposerCard(
-    text: String,
-    onText: (String) -> Unit,
+    input: ComposerInput,
     action: PrimaryAction,
     onPrimary: () -> Unit,
     onMic: () -> Unit,
@@ -151,36 +135,30 @@ private fun ComposerCard(
     onSend: () -> Unit,
     onPlusAction: (PlusAction) -> Unit,
 ) {
-    val focus = remember { FocusRequester() }
-    val keyboard = LocalSoftwareKeyboardController.current
-    var focused by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        focus.requestFocus()
-        keyboard?.show()
+    LaunchedEffect(Unit) { input.focusAndShowKeyboard() }
+    DisposableEffect(input) {
+        // Collapse back to the pill when focus leaves an empty composer.
+        input.onFocusChange = { focused -> if (!focused && !input.hasText) onExpand(false) }
+        input.onEnter = onSend
+        onDispose { input.onFocusChange = {}; input.onEnter = {} }
     }
-    // The agent's work display can briefly take window focus (when an app it drives opens a new screen), and
-    // Android closes the keyboard when that happens. Reopen it as soon as the chat has focus again.
     // The agent's work display briefly takes focus for some actions (a back key, an app opening a new screen),
     // and Android closes the keyboard when that happens. When focus is handed back, reopen it if it was up a
     // moment ago. Focus can leave and return within a frame, so this listens to the hand-back rather than to
     // window focus.
     val imeVisible = WindowInsets.isImeVisible
     val imeVisibleNow by rememberUpdatedState(imeVisible)
-    val focusedNow by rememberUpdatedState(focused)
     val imeHiddenAt = remember { longArrayOf(0L) }
     LaunchedEffect(imeVisible) { if (!imeVisible) imeHiddenAt[0] = SystemClock.uptimeMillis() }
     LaunchedEffect(Unit) {
         HiddenDisplay.focusReturned.drop(1).collect {
             // Was the keyboard up just before? (Insets lag, so it may still read as visible here.)
             val wasUp = imeVisibleNow || SystemClock.uptimeMillis() - imeHiddenAt[0] < 2500
-            if (!focusedNow || !wasUp) return@collect
+            if (!input.focused || !wasUp) return@collect
             // A request made before the IME has re-bound to this window is dropped, so keep asking for a moment.
             repeat(8) {
                 delay(200)
-                if (!imeVisibleNow) {
-                    focus.requestFocus()
-                    keyboard?.show()
-                }
+                if (!imeVisibleNow) input.focusAndShowKeyboard()
             }
         }
     }
@@ -193,30 +171,11 @@ private fun ComposerCard(
             .border(1.dp, Palette.Border, shape)
             .padding(start = 8.dp, end = 8.dp, top = 14.dp, bottom = 8.dp),
     ) {
-        Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp).heightIn(min = 28.dp, max = 180.dp)) {
-            if (text.isEmpty()) Text("Ask or1…", style = Type.Input.copy(color = Palette.Placeholder))
-            BasicTextField(
-                value = text,
-                onValueChange = onText,
-                textStyle = Type.Input,
-                cursorBrush = SolidColor(Palette.Accent),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .focusRequester(focus)
-                    .onFocusChanged {
-                        // Collapse back to the pill when focus leaves an empty composer.
-                        if (focused && !it.isFocused && text.isBlank()) onExpand(false)
-                        focused = it.isFocused
-                    }
-                    .onPreviewKeyEvent {
-                        // Hardware keyboards: Enter sends, Shift+Enter adds a line.
-                        if (it.type == KeyEventType.KeyDown && it.key == Key.Enter && !it.isShiftPressed) {
-                            if (text.isNotBlank()) onSend()
-                            true
-                        } else false
-                    },
-            )
-        }
+        AndroidView(
+            factory = input::createView,
+            onRelease = input::release,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).heightIn(min = 28.dp),
+        )
         Spacer(Modifier.height(14.dp))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             PlusButton(onPlusAction, background = Palette.SurfaceHigh)

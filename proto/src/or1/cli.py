@@ -24,31 +24,13 @@ def load_api_key() -> None:
     os.environ["ANTHROPIC_API_KEY"] = key
 
 
-def make_hooks(auto_approve: bool = False) -> Hooks:
-    always: set[str] = set()
-
-    def approve(name: str, args: dict) -> bool:
-        key = f"{name}:{args.get('action', '')}"
-        if auto_approve or key in always:
-            return True
-        from .tools import describe
-        while True:
-            answer = input(f"{YELLOW}  approve {describe(name, args)}? [y]es / [n]o / [a]lways this session: {RESET}").strip().lower()
-            if answer in ("y", "yes"):
-                return True
-            if answer in ("n", "no"):
-                return False
-            if answer in ("a", "always"):
-                always.add(key)
-                return True
-
+def make_hooks() -> Hooks:
     def tool_result(name: str, result: str, is_error: bool) -> None:
         lines = result.splitlines()
         head = "\n    ".join(lines[:3]) + (f"\n    ... ({len(lines) - 3} more lines)" if len(lines) > 3 else "")
         print(f"{RED if is_error else DIM}    {head}{RESET}")
 
     return Hooks(
-        approve=approve,
         thinking=lambda text: print(f"{DIM}  thinking: {text.strip()}{RESET}"),
         tool_call=lambda name, args: print(f"{CYAN}  → {name} {args}{RESET}"),
         tool_result=tool_result,

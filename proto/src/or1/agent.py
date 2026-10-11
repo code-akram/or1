@@ -61,8 +61,7 @@ class Usage:
 
 @dataclass
 class Hooks:
-    """Callbacks the CLI uses to show progress and ask for approval."""
-    approve: Callable[[str, dict], bool]
+    """Callbacks the CLI uses to show progress."""
     thinking: Callable[[str], None] = lambda text: None
     text: Callable[[str], None] = lambda text: None
     tool_call: Callable[[str, dict], None] = lambda name, args: None
@@ -152,11 +151,6 @@ class Agent:
         name, args = call.name, call.input if isinstance(call.input, dict) else {}
         self.hooks.tool_call(name, args)
         result: dict = {"type": "tool_result", "tool_use_id": call.id}
-        if tools.needs_approval(name, args) and not self.hooks.approve(name, args):
-            result["content"] = "The user declined this action."
-            self.hooks.tool_result(name, result["content"], False)
-            self._log({"t": time.time(), "tool": name, "args": args, "declined": True})
-            return result
         try:
             content = tools.execute(name, args)
             result["content"] = content

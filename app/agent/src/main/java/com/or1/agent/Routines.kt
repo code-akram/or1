@@ -25,10 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONArray
 import org.json.JSONObject
 
-/**
- * A request the agent runs on its own later: at a time (once or repeating) or when a matching notification arrives.
- * `allowed` holds the tool:action approvals the user answered with Always during this routine's runs.
- */
+/** A request the agent runs on its own later: at a time (once or repeating) or when a matching notification arrives. */
 data class Routine(
     val id: String,
     val prompt: String,
@@ -42,10 +39,13 @@ data class Routine(
     val next: Long = 0,
     val app: String? = null,
     val textContains: String? = null,
-    val allowed: Set<String> = emptySet(),
     val lastRun: Long = 0,
+    /** A short name the user or the agent gave it; the trigger describes it otherwise. */
+    val name: String? = null,
 ) {
     val onNotification get() = app != null || textContains != null
+
+    val title: String get() = name ?: describe()
 
     fun describe(): String {
         if (onNotification) {
@@ -65,7 +65,7 @@ data class Routine(
     fun toJson(): JSONObject = JSONObject()
         .put("id", id).put("prompt", prompt).put("hour", hour).put("minute", minute).put("repeat", repeat)
         .put("weekday", weekday).put("next", next).put("app", app).put("text_contains", textContains)
-        .put("allowed", JSONArray(allowed.toList())).put("last_run", lastRun)
+        .put("last_run", lastRun).put("name", name)
 
     companion object {
         fun fromJson(o: JSONObject) = Routine(
@@ -73,8 +73,8 @@ data class Routine(
             repeat = o.optString("repeat", "once"), weekday = o.optInt("weekday"), next = o.optLong("next"),
             app = o.optString("app").takeIf { o.has("app") && !o.isNull("app") && it.isNotBlank() },
             textContains = o.optString("text_contains").takeIf { o.has("text_contains") && !o.isNull("text_contains") && it.isNotBlank() },
-            allowed = o.optJSONArray("allowed")?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() } ?: emptySet(),
             lastRun = o.optLong("last_run"),
+            name = o.optString("name").takeIf { o.has("name") && !o.isNull("name") && it.isNotBlank() },
         )
     }
 }
@@ -124,7 +124,7 @@ object Routines {
     // --- The routines tool -----------------------------------------------------------------------------------------
 
     fun tool(args: JSONObject): String = when (val action = args.getString("action")) {
-        "list" -> all().joinToString("\n") { "- [${it.id}] ${it.describe()}: ${it.prompt}" }.ifEmpty { "No routines." }
+        "list" -> all().joinToString("\n") { r -> "- [${r.id}] ${r.name?.let { "“$it”, " }.orEmpty()}${r.describe()}: ${r.prompt}" }.ifEmpty { "No routines." }
         "add" -> add(args)
         "remove" -> {
             val id = args.optString("id").ifBlank { throw IllegalArgumentException("remove needs `id` (see list).") }
@@ -150,8 +150,8 @@ object Routines {
     }
 
     /**
-     * Replaces a routine's request and trigger (the Routines screen), keeping its id and Always answers. `args` takes
-     * the same fields as the tool's add. Throws IllegalArgumentException with a readable message on bad input.
+     * Replaces a routine's name, request and trigger (the Routines screen), keeping its id. `args` takes the same
+     * fields as the tool's add. Throws IllegalArgumentException with a readable message on bad input.
      */
     fun edit(id: String, args: JSONObject): Routine {
         val old = get(id) ?: throw IllegalArgumentException("No routine with id $id.")
@@ -162,8 +162,8 @@ object Routines {
         return routine
     }
 
-    /** Forgets an Always answer (`tool:action`) given during this routine's runs. */
-    fun revoke(id: String, key: String) = update(id) { it.copy(allowed = it.allowed - key) }
+    /** Sets or (blank) clears a routine's name. */
+    fun rename(id: String, name: String) = update(id) { it.copy(name = name.trim().ifBlank { null }) }
 
     // --- Time triggers ---------------------------------------------------------------------------------------------
 
@@ -269,8 +269,8 @@ class RoutineReceiver : BroadcastReceiver() {
 
 /**
  * A routine from the tool's add arguments: `prompt` and exactly one trigger (`at` with optional `repeat`/`date`,
- * `in_minutes`, or `app`/`text_contains`). `keep` is the routine being edited: its Always answers, last run and (for
- * weekly ones without a `date`) weekday carry over.
+ * `in_minutes`, or `app`/`text_contains`), and an optional `name`. `keep` is the routine being edited: its last run,
+ * its name (unless `name` is given; blank clears it) and (for weekly ones without a `date`) weekday carry over.
  */
 internal fun parseRoutine(args: JSONObject, id: String, now: ZonedDateTime, keep: Routine? = null): Routine {
     val prompt = args.optString("prompt").ifBlank { throw IllegalArgumentException("add needs `prompt`.") }
@@ -304,7 +304,8 @@ internal fun parseRoutine(args: JSONObject, id: String, now: ZonedDateTime, keep
             base.copy(next = next.toInstant().toEpochMilli())
         }
     }
-    return if (keep == null) routine else routine.copy(allowed = keep.allowed, lastRun = keep.lastRun)
+    val name = if (args.has("name")) args.optString("name").trim().ifBlank { null } else keep?.name
+    return if (keep == null) routine.copy(name = name) else routine.copy(lastRun = keep.lastRun, name = name)
 }
 
 /** The first run of a time routine strictly after [after]. */

@@ -2,6 +2,7 @@ package com.or1.agent.ui
 
 import android.os.SystemClock
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -42,6 +43,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,7 +55,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.style.TextAlign
@@ -85,7 +86,8 @@ fun ChatScreen() {
         val routines by Routines.list.collectAsState()
         val showRoutines by AgentHub.showRoutines.collectAsState()
 
-        var text by rememberSaveable { mutableStateOf("") }
+        // A native field (see ComposerInput): typing doesn't recompose anything.
+        val input = remember { ComposerInput() }
         var expanded by rememberSaveable { mutableStateOf(false) }
         var viewerOpen by remember { mutableStateOf(false) }
         var pastChat by remember { mutableStateOf<PastChat?>(null) }
@@ -98,7 +100,6 @@ fun ChatScreen() {
         }
         val drawer = rememberDrawerState(DrawerValue.Closed)
         val scope = rememberCoroutineScope()
-        val focusManager = LocalFocusManager.current
 
         val suggestions = remember(notificationTick, items.isEmpty()) { Suggestions.build(context) }
 
@@ -119,13 +120,13 @@ fun ChatScreen() {
         LaunchedEffect(imeVisible) {
             val wasVisible = imeWasVisible
             imeWasVisible = imeVisible
-            if (wasVisible && !imeVisible && text.isBlank()) {
+            if (wasVisible && !imeVisible && !input.hasText) {
                 val hiddenAt = SystemClock.uptimeMillis()
                 delay(600) // the focus change is reported around the time the IME hides
                 val focusSteal = kotlin.math.abs(focusLostAt - hiddenAt) < 1500
                 if (!focusSteal && !WindowInsetsHolder.imeVisible) {
                     expanded = false
-                    focusManager.clearFocus()
+                    input.dismiss()
                 }
             }
         }
@@ -134,10 +135,10 @@ fun ChatScreen() {
         fun send(message: String) {
             if (message.isBlank() || busy) return
             AgentHub.submit(message.trim())
-            text = ""
+            input.clear()
             // The agent takes a while: give the screen back to the conversation.
             expanded = false
-            focusManager.clearFocus()
+            input.dismiss()
         }
 
         // The rail first, below the status bar and the notch; every screen and the drawer below it.
@@ -160,6 +161,10 @@ fun ChatScreen() {
                     Box(Modifier.fillMaxSize().background(Palette.Background)) {
                         Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
                             TopBar(
+                                onBlankTap = {
+                                    input.dismiss()
+                                    if (!input.hasText) expanded = false
+                                },
                                 showDot = suggestions.any { it.appIcon != null },
                                 showNewChat = items.isNotEmpty(),
                                 onMenu = { scope.launch { drawer.open() } },
@@ -174,8 +179,8 @@ fun ChatScreen() {
                                     interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
                                     indication = null,
                                 ) {
-                                    focusManager.clearFocus()
-                                    if (text.isBlank()) expanded = false
+                                    input.dismiss()
+                                    if (!input.hasText) expanded = false
                                 },
                             ) {
                                 if (items.isEmpty()) {
@@ -187,15 +192,14 @@ fun ChatScreen() {
                                 }
                             }
                             Composer(
-                                text = text,
-                                onText = { text = it },
+                                input = input,
                                 busy = busy,
-                                expanded = expanded || text.isNotEmpty(),
+                                expanded = expanded,
                                 onExpand = { expanded = it },
                                 model = AgentHub.model,
                                 effort = effort,
                                 onEffort = AgentHub::setEffort,
-                                onSend = { send(text) },
+                                onSend = { send(input.text) },
                                 onStop = AgentHub::stop,
                                 onPlusAction = {
                                     when (it) {
@@ -208,7 +212,13 @@ fun ChatScreen() {
                         }
                         pastChat?.let { HistoryView(it, onClose = { pastChat = null }) }
                         if (routinesOpen) RoutinesView(onClose = { routinesOpen = false }, onOpenPreview = { viewerOpen = true })
-                        if (viewerOpen) WorkViewer(onClose = { viewerOpen = false })
+                        if (viewerOpen) {
+                            WorkViewer(
+                                onClose = { viewerOpen = false },
+                                // Back to the chat with the composer open, to ask about what's on the work screen.
+                                onAsk = { viewerOpen = false; routinesOpen = false; expanded = true },
+                            )
+                        }
                     }
                 }
             }
@@ -217,9 +227,11 @@ fun ChatScreen() {
 }
 
 @Composable
-private fun TopBar(showDot: Boolean, showNewChat: Boolean, onMenu: () -> Unit, onNewChat: () -> Unit) {
+private fun TopBar(onBlankTap: () -> Unit, showDot: Boolean, showNewChat: Boolean, onMenu: () -> Unit, onNewChat: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().height(60.dp).padding(horizontal = 8.dp),
+        Modifier.fillMaxWidth().height(60.dp)
+            .clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null, onClick = onBlankTap)
+            .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box {
@@ -236,7 +248,7 @@ private fun TopBar(showDot: Boolean, showNewChat: Boolean, onMenu: () -> Unit, o
     }
 }
 
-/** A routine result or a routine waiting for approval; tapping opens the Routines screen. */
+/** A routine result; tapping opens the Routines screen. */
 @Composable
 private fun AlertBanner(alert: com.or1.agent.Alert, onOpen: () -> Unit, onDismiss: () -> Unit) {
     Row(
@@ -244,7 +256,7 @@ private fun AlertBanner(alert: com.or1.agent.Alert, onOpen: () -> Unit, onDismis
             .padding(horizontal = 12.dp, vertical = 4.dp)
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(if (alert.approvalId != null) Palette.ApprovalBorder else Palette.Surface)
+            .background(Palette.Surface)
             .clickable(onClick = onOpen)
             .padding(start = 14.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -253,8 +265,7 @@ private fun AlertBanner(alert: com.or1.agent.Alert, onOpen: () -> Unit, onDismis
         Spacer(Modifier.width(10.dp))
         // Two lines: the full text is on the Routines screen, a tap away.
         Text(alert.text, style = Type.Step.copy(color = Palette.Text), maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        // An approval goes away once it's answered (on the Routines screen); results can be dismissed.
-        if (alert.approvalId == null) IconCircle(Icons.Close, "Dismiss", onDismiss, tint = Palette.TextDim, background = Color.Transparent, size = 36)
+        IconCircle(Icons.Close, "Dismiss", onDismiss, tint = Palette.TextDim, background = Color.Transparent, size = 36)
     }
 }
 
@@ -320,24 +331,29 @@ private fun Conversation(items: List<ChatItem>, busy: Boolean, preview: android.
     }
 }
 
-/** One request and its work card, approvals, notes and reply (the chat, and the routines thread). */
+/** One request and its work card, notes and reply (the chat, and the routines thread). */
 @Composable
 fun TurnView(turn: Turn, active: Boolean, preview: android.graphics.Bitmap?, onOpenPreview: () -> Unit, modifier: Modifier = Modifier) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = modifier) {
         turn.user?.let { UserBubble(it) }
-        if (turn.steps.isNotEmpty() || (active && turn.approvals.none { it.state == null })) {
+        if (turn.steps.isNotEmpty() || active) {
             WorkCard(turn, active, preview, onOpenPreview)
         }
-        for (approval in turn.approvals) ApprovalCard(approval) { AgentHub.decide(approval, it) }
         for (info in turn.infos) InfoLine(info)
         turn.reply?.let { ReplyBlock(it) } ?: turn.draft?.let { ReplyBlock(ChatItem.Reply(it.id, it.text, 0.0, 0.0)) }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun Drawer(totalCost: Double, routineCount: Int, onNewChat: () -> Unit, onRoutines: () -> Unit, onOpen: (PastChat) -> Unit, open: Boolean) {
     val context = LocalContext.current
-    val chats = remember(open) { if (open) History.list(context) else emptyList() }
+    // Bumped after a rename or delete, to re-read the list.
+    var version by remember { mutableIntStateOf(0) }
+    val chats = remember(open, version) { if (open) History.list(context) else emptyList() }
+    var renaming by remember { mutableStateOf<PastChat?>(null) }
+    // Deleted from the list at once; the file goes when the Undo pill does.
+    var pending by remember { mutableStateOf<PendingDelete?>(null) }
     ModalDrawerSheet(drawerContainerColor = Palette.Background, drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp)) {
         Column(Modifier.fillMaxSize().systemBarsPadding().padding(horizontal = 12.dp)) {
             Wordmark(block = 5.dp, modifier = Modifier.padding(start = 12.dp, top = 20.dp, bottom = 20.dp))
@@ -360,16 +376,48 @@ private fun Drawer(totalCost: Double, routineCount: Int, onNewChat: () -> Unit, 
             }
             Spacer(Modifier.height(18.dp))
             Text("Recent", style = Type.Caption, modifier = Modifier.padding(start = 12.dp, bottom = 6.dp))
-            LazyColumn(Modifier.weight(1f)) {
-                items(chats, key = { it.file.name }) { chat ->
-                    Column(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable { onOpen(chat) }
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                    ) {
-                        Text(chat.title, style = Type.Body, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(chat.time, style = Type.Caption)
+            Box(Modifier.weight(1f)) {
+                LazyColumn(Modifier.fillMaxSize()) {
+                    items(chats.filter { it.file.name != pending?.key }, key = { it.file.name }) { chat ->
+                        if (renaming == chat) {
+                            InlineRename(
+                                initial = if (chat.renamed) chat.title else "",
+                                placeholder = chat.title,
+                                style = Type.Body,
+                                onDone = { History.rename(context, chat, it); renaming = null; version++ },
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp).animateItem(),
+                            )
+                        } else {
+                            Row(
+                                Modifier.fillMaxWidth().animateItem().clip(RoundedCornerShape(14.dp))
+                                    .combinedClickable(onClick = { onOpen(chat) }, onLongClick = { renaming = chat })
+                                    .padding(start = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
+                                    Text(chat.title, style = Type.Body, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(chat.time, style = Type.Caption)
+                                }
+                                RowMenu(
+                                    listOf(
+                                        MenuAction("Rename", Icons.Rename) { renaming = chat },
+                                        MenuAction("Delete", Icons.Delete, destructive = true) {
+                                            pending?.commit?.invoke()
+                                            pending = PendingDelete(chat.file.name, "Chat deleted") { History.delete(context, chat); version++ }
+                                        },
+                                    ),
+                                    label = "Chat options",
+                                )
+                            }
+                        }
                     }
                 }
+                UndoBar(
+                    pending,
+                    onUndo = { pending = null },
+                    onExpired = { pending?.commit?.invoke(); pending = null },
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
+                )
             }
             Text(
                 "This session · $%.4f".format(totalCost),

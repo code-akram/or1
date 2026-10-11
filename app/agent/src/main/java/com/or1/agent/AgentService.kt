@@ -37,11 +37,11 @@ class AgentService : Service() {
 
 /**
  * Dev-only remote driver for evals: `am broadcast -n com.or1.agent/.DebugReceiver --es text "..." --es id N
- * [--ez auto_approve true | --ez auto_deny true] [--ez fresh true]`. Guarded by android.permission.DUMP, which only shell and system hold.
+ * [--ez fresh true]`. Guarded by android.permission.DUMP, which only shell and system hold.
  * The reply is appended to files/replies.jsonl under the given id. `--es routine ID` runs that routine now;
  * `--el backdate_chat_ms N` makes the chat look idle N ms longer (tests the auto new chat after an hour);
  * `--es lockdown off|on` lifts or restores the system UI lockdown ([Lockdown]) for development;
- * `--ez stop true` stops the request or routine run in progress (e.g. one waiting on an approval);
+ * `--ez stop true` stops the request or routine run in progress;
  * `--es dismiss pkg1,pkg2` clears those apps' notifications (eval cleanup: the shell can't clear other apps');
  * `--es audio test` runs the speaker/mic check, `--es audio listen` just measures what the mic hears ([AudioCheck];
  * result in logcat tag or1-audio and files/audio.txt);
@@ -79,9 +79,7 @@ class DebugReceiver : BroadcastReceiver() {
         AgentHub.submit(
             text,
             requestId = intent.getStringExtra("id"),
-            autoApprove = intent.getBooleanExtra("auto_approve", false),
             fresh = intent.getBooleanExtra("fresh", false),
-            autoDeny = intent.getBooleanExtra("auto_deny", false),
         )
     }
 }

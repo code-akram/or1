@@ -65,11 +65,8 @@ class UsageTally {
     }
 }
 
-/** Callbacks the UI layer implements: progress display and the approval gate. */
+/** Callbacks the UI layer implements: progress display. */
 interface AgentHooks {
-    suspend fun approve(tool: String, args: JSONObject): Boolean
-    /** Calls the context makes riskier than [Tools.needsApproval] says (e.g. memory writes during a routine run). */
-    fun mustApprove(tool: String, args: JSONObject): Boolean = false
     fun thinking(text: String) {}
     /** The text of the response being streamed so far (replaced, not appended, on each call). */
     fun partial(text: String) {}
@@ -89,6 +86,8 @@ class Agent(
     private val messages = mutableListOf<MessageParam>()
     private var openCalls: List<ToolUseBlock> = emptyList()
     val usage = UsageTally()
+    /** This conversation's transcript (past chats list it by file). */
+    val transcriptFile: java.io.File get() = transcript.file
 
     suspend fun send(text: String): String {
         val start = messages.size
@@ -197,12 +196,6 @@ class Agent(
         val name = call.name()
         hooks.toolCall(name, args)
         val result = ToolResultBlockParam.builder().toolUseId(call.id())
-        if ((tools.needsApproval(name, args) || hooks.mustApprove(name, args)) && !hooks.approve(name, args)) {
-            val declined = "The user declined this action."
-            hooks.toolResult(name, declined, false)
-            transcript.log(JSONObject().put("tool", name).put("args", args).put("declined", true))
-            return result.content(declined).build()
-        }
         val output = try {
             tools.run(name, args)
         } catch (e: CancellationException) {

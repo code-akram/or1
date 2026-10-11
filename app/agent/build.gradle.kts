@@ -37,6 +37,9 @@ android {
         debug {
             if (platformKeystore.exists()) signingConfig = signingConfigs.getByName("platform")
         }
+        release {
+            if (platformKeystore.exists()) signingConfig = signingConfigs.getByName("platform")
+        }
     }
 
     compileOptions {
