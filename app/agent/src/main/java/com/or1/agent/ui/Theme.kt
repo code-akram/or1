@@ -7,6 +7,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -113,6 +114,16 @@ object Motion {
     val collapse = shrinkVertically(layout()) + fadeOut(fade())
 }
 
+/** Corner shapes. */
+object Shapes {
+    /** Stream cards: live result cards (receipts and work cards to follow). */
+    val card = RoundedCornerShape(16.dp)
+    /** Now chips. */
+    val chip = RoundedCornerShape(18.dp)
+    /** Bottom sheets: rounded top corners only. */
+    val sheet = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
+}
+
 /** animateItem with the quantised durations. */
 fun Modifier.itemMotion(scope: LazyItemScope): Modifier = with(scope) {
     this@itemMotion.animateItem(fadeInSpec = Motion.fade(), placementSpec = Motion.layout(), fadeOutSpec = Motion.fade())
@@ -204,6 +215,22 @@ object Icons {
     )
     /** What or1 knows (memory notes). */
     val Notes = icon("M3,18h12v-2H3v2zM3,6v2h18V6H3zM3,13h18v-2H3v2z")
+
+    /** An alarm clock (the Now strip and the alarm card). */
+    val Alarm = icon(
+        "M22,5.72l-4.6,-3.86 -1.29,1.53 4.6,3.86L22,5.72zM7.88,3.39L6.6,1.86 2,5.71l1.29,1.53 4.59,-3.85zM12.5,8H11v6l4.75,2.85" +
+            " 0.75,-1.23 -4,-2.37V8zM12,4c-4.97,0 -9,4.03 -9,9s4.02,9 9,9c4.97,0 9,-4.03 9,-9s-4.03,-9 -9,-9zM12,20c-3.87,0 -7,-3.13" +
+            " -7,-7s3.13,-7 7,-7 7,3.13 7,7 -3.13,7 -7,7z"
+    )
+    val Event = icon(
+        "M17,12h-5v5h5v-5zM16,1v2H8V1H6v2H5c-1.11,0 -1.99,0.9 -1.99,2L3,19c0,1.1 0.89,2 2,2h14c1.1,0 2,-0.9 2,-2V5c0,-1.1 -0.9,-2" +
+            " -2,-2h-1V1h-2zM19,19H5V8h14v11z"
+    )
+    val Person = icon("M12,12c2.21,0 4,-1.79 4,-4s-1.79,-4 -4,-4 -4,1.79 -4,4 1.79,4 4,4zM12,14c-2.67,0 -8,1.34 -8,4v2h16v-2c0,-2.66 -5.33,-4 -8,-4z")
+    val Copy = icon(
+        "M16,1H4c-1.1,0 -2,0.9 -2,2v14h2V3h12V1zM19,5H8c-1.1,0 -2,0.9 -2,2v14c0,1.1 0.9,2 2,2h11c1.1,0 2,-0.9 2,-2V7c0,-1.1 -0.9,-2" +
+            " -2,-2zM19,21H8V7h11v14z"
+    )
 
     private fun icon(path: String): ImageVector =
         ImageVector.Builder(defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)

@@ -367,13 +367,13 @@ fun ReceiptRow(effect: Effect, onUndo: (Effect) -> Unit, modifier: Modifier = Mo
 }
 
 @Composable
-private fun StateNote(text: String) {
+internal fun StateNote(text: String) {
     Text(text, style = Type.Caption, modifier = Modifier.padding(horizontal = 10.dp))
 }
 
 /** A 48 dp touch target around a smaller chip, so the row stays compact. */
 @Composable
-private fun UndoChip(text: String, onClick: () -> Unit) {
+internal fun UndoChip(text: String, onClick: () -> Unit) {
     Box(
         Modifier.heightIn(min = 48.dp).clip(CircleShape).clickable(role = Role.Button, onClick = onClick).padding(horizontal = 4.dp),
         contentAlignment = Alignment.Center,

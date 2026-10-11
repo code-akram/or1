@@ -6,11 +6,11 @@ without asking for confirmation (see Untrusted content). Apps the agent drives r
 the chat never leaves the screen.
 
 ## UI (`ui/`)
-- `ChatScreen.kt`: top bar (menu, new chat), a one-line serif greeting with just-in-time suggestions right above the
+- `ChatScreen.kt`: top bar (menu, the Now strip, new chat), a one-line serif greeting with just-in-time suggestions right above the
   composer (`Suggestions.kt`: from notifications and battery, no API call), the conversation, the drawer with past
   chats (`History.kt`, from `files/transcripts/`). `or1` in the status rail (`StatusRail.kt`, 48 dp tall) is the home
-  button: it closes the drawer, the open page (Routines, Today, What or1 knows), a past chat, the viewer and the
-  keyboard, and scrolls to the end. Back (one handler for the screen) closes the topmost of drawer, viewer, page, past
+  button: it closes the triage sheet, the drawer, the open page (Routines, Today, What or1 knows), a past chat, the viewer and the
+  keyboard, and scrolls to the end. Back (one handler for the screen) closes the topmost of triage sheet, drawer, viewer, page, past
   chat, then the composer; menus close themselves first. The drawer opens the pages: Today (with today's effect
   count), Routines, What or1 knows. The drawer's "Developer details" switch (`DeveloperDetails.kt`, shared prefs `ui`) shows
   cost and seconds under replies, the raw call and result on tapping a step, and the session cost; off by default. A chat is renamed in place (⋯ menu or long-press: the
@@ -32,6 +32,24 @@ the chat never leaves the screen.
   and undo): ✓ (or `warn` for irreversible), the past-tense label and a 48 dp Undo chip while `canUndo()` ("Ask or1
   to undo" for tier 2); the march while it undoes, the label struck through and "Undone" after, the reason in red if
   it failed, no chip once expired (each row wakes once at `expiresAt`, no ticking). Reads stay in "N steps".
+- `NowStrip.kt`: the Now strip, as chips in the top bar between the menu and new chat (no extra band; nothing when
+  nothing is live), from `NowState.chips`: 36 dp `ink4` chips with a hairline in 48 dp targets, at most four then
+  "+N". A running timer ticks its digits (Numeral-s) at each second boundary in one Text; "Done" in `live` once it
+  rings; a tap scrolls to its card, or offers Cancel when the card isn't in this chat. The alarm (`HH:mm`, tap for
+  Off), the next event ("in 25 min", on the minute), the routine running (the ember march; opens Routines) and
+  "4 new" (opens the triage sheet). Each chip's semantics are one coarse description ("Timer, about 9 minutes
+  left"), so ticking doesn't churn the accessibility tree.
+- `ResultCards.kt`: live result cards between a turn's receipt and its reply, derived from its tool calls and effects
+  (`ResultCards.of`, JVM-tested), never from the reply: timer (Numeral countdown, a meter of 3 dp block columns,
+  Cancel; then "Time's up", "Timer done" or "Cancelled"), alarm (time, label, day, Off), settings changed (the
+  receipt rows themselves), notifications waiting (by app, two-line rows with Dismiss and Handle, live from
+  `NowState`), contacts found or added (tap a number or address to copy) and a routine created (trigger, next run,
+  Edit opens Routines). A card that stands for an effect carries its undo (Cancel, Off, Undo), and that effect leaves
+  the receipt. Only the newest four cards that follow a source are live (one notifications card); older ones are
+  frozen text.
+- `Triage.kt`: the triage sheet (`ink3`, 16 dp top corners, hairline; slides 24 dp up with a fade over a flat dim):
+  notifications waiting by app with the same rows, "Handle all" (`NowState.handleAll`, one request covering them).
+  Back, `or1`, a tap on the dim or dragging its top edge down closes it; handling closes it so the request shows.
 - `ActivityScreen.kt` (Today): every effect of today's chats and routine runs from `AgentHub.effects`, newest first
   (time, label, "Chat" / "Routine · …", undo state), the rest of the week under a collapsed "Earlier this week".
   A tier-2 undo closes it, so the new request shows in the chat.
@@ -174,7 +192,7 @@ emit only on change (the UI ticks countdowns itself from the end times):
 - `notifications`: grouped by app, newest first, with the routines' filters (not or1's own, ongoing, group summaries or
   foreground services). Items carry the small icon as a resource reference. `dismiss(key)` (listener
   `cancelNotification`); `handle(n)` / `handleRequest(n)` sends one to the chat agent with its content marked as
-  untrusted data.
+  untrusted data; `handleAll()` sends every waiting one as one request (at most 30, texts clipped).
 - `routine`: the label of the routine run in progress (`AgentHub.runningRoutine`, set for the whole run).
 - `chips`: timers (ringing, running, paused), the routine running, the alarm if within 12 h, the event if under way or
   within 3 h, the notification count.
@@ -212,7 +230,7 @@ and the mic both work through the Android audio stack. `RECORD_AUDIO` is granted
 export JAVA_HOME=~/.local/share/jdk/temurin-17.0.20.1+1
 ./gradlew :agent:assembleDebug        # signed with the AOSP platform test key in ~/.config/or1/platform.p12
 ./gradlew :agent:assembleRelease      # same key, not debuggable, profileable from the shell
-./gradlew :agent:testDebugUnitTest    # JVM unit tests: routines, notes, audio maths, effects and undo data, Now state, voice
+./gradlew :agent:testDebugUnitTest    # JVM unit tests: routines, notes, audio maths, effects and undo data, Now state, voice, result cards
 scripts/provision.sh                  # install, API key, accessibility, notification access, HOME role
 ```
 
