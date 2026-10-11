@@ -97,12 +97,31 @@ class ActivityTest {
         assertTrue(classify("shell", args("command" to "am start -a android.intent.action.VIEW -d https://x.example/?q=1")) != null)
     }
 
+    @Test fun shellLabelsSayWhatTheCommandDid() {
+        fun label(command: String) = classify("shell", args("command" to command))!!.label
+        assertEquals("Changed setting screen_brightness", label("settings put system screen_brightness 128"))
+        // The first part that writes names it.
+        assertEquals("Changed setting x", label("ls; settings put system x 1"))
+        assertEquals("Sent com.example.app a command", label("am broadcast -a com.example.PING -n com.example.app/.Receiver"))
+        assertEquals("Sent com.example.app a command", label("am startservice -p com.example.app -a X"))
+        assertEquals("Sent an app a command", label("am broadcast -a android.intent.action.X"))
+        assertEquals("Changed app com.android.gallery3d", label("pm uninstall com.android.gallery3d"))
+        assertEquals("Changed app com.x", label("pm disable-user --user 0 com.x"))
+        assertEquals("Changed an app", label("pm trim-caches 1G"))
+        assertEquals("Pressed keys", label("input keyevent 26"))
+        assertEquals("Opened x.example", label("am start -a android.intent.action.VIEW -d https://x.example/?q=1"))
+        assertEquals("Ran a shell command", label("echo hi > /sdcard/x"))
+        assertEquals("Ran a shell command", label("rm /sdcard/notes.txt"))
+    }
+
     @Test fun tapsByLabel() {
         assertEquals(UndoTier.NONE, tap("“Send”")!!.tier)
         assertEquals("Tapped “Send” in Gmail", tap("“Send”")!!.label)
         assertEquals(UndoTier.AGENT, tap("“Archive”")!!.tier)
         assertEquals(UndoTier.AGENT, tap("“Wi-Fi”", "Switch")!!.tier)
-        assertEquals("Toggled “Wi-Fi” in Gmail", tap("“Wi-Fi”", "Switch")!!.label)
+        // A tier-2 row names the app in its caption ("via or1 · Gmail"), not twice.
+        assertEquals("Toggled “Wi-Fi”", tap("“Wi-Fi”", "Switch")!!.label)
+        assertEquals("Tapped “Archive”", tap("“Archive”")!!.label)
         assertNull(tap("“Inbox”"))
         assertNull(tap("an unlabeled button"))
         assertNull(Effects.classify("act", args("action" to "tap", "x" to 1, "y" to 2), CallFacts(), now))

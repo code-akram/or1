@@ -72,6 +72,13 @@ object StepLabels {
         }
     }
 
+    /** Labels of steps that only move around or look (read, scroll, a key press): never what an act did. */
+    fun isNavigation(label: String): Boolean =
+        label == "Read the screen" || label == "Looked at the screen" || label.startsWith("Scrolled ") || label.startsWith("Pressed ")
+
+    /** What a finished act's header names: its last step that isn't navigation, else its last step. */
+    fun summary(labels: List<String>): String? = labels.lastOrNull { !isNavigation(it) } ?: labels.lastOrNull()
+
     private fun routineTrigger(args: JSONObject): String = when {
         args.optInt("in_minutes", 0) > 0 -> "in ${durationNoun(args.getInt("in_minutes") * 60)}"
         args.optString("at").isNotBlank() -> when (args.optString("repeat", "once")) {

@@ -191,7 +191,7 @@ object Effects {
             "open" -> args.optString("uri").takeIf { it.isNotBlank() && args.optString("package").isBlank() }
                 ?.let { Classified("Opened ${clip(it, 60)}", UndoTier.NONE) }
             "shell" -> args.optString("command").takeIf { it.isNotBlank() && !isReadOnlyShell(it) }
-                ?.let { Classified("Ran: ${clip(it.trim(), 60)}", UndoTier.NONE) }
+                ?.let { Classified(shellLabel(it), UndoTier.NONE) }
             else -> null
         }
     }
@@ -208,16 +208,48 @@ object Effects {
             first in commits || toggle -> UndoTier.AGENT
             else -> return null
         }
-        val text = (if (toggle) "Toggled " else "Tapped ") + (label?.let { "“$it”" } ?: raw) + (facts.app?.let { " in $it" } ?: "")
+        // A tier-2 row's caption already names the app ("via or1 · Gmail").
+        val app = facts.app?.takeIf { tier == UndoTier.NONE }?.let { " in $it" }.orEmpty()
+        val text = (if (toggle) "Toggled " else "Tapped ") + (label?.let { "“$it”" } ?: raw) + app
         return Classified(text, tier, expiresAt = if (tier == UndoTier.AGENT) now.plusHours(24).toEpochMs() else 0)
     }
 
     fun isReadOnlyShell(command: String): Boolean {
         if (Regex("(^|[^0-9&])>").containsMatchIn(command) || "-delete" in command || "-exec" in command) return false
-        return command.split(Regex("&&|\\|\\||[;|\\n]")).map { it.trim() }.filter { it.isNotEmpty() }.all { part ->
-            readOnlyShell.any { part == it || part.startsWith("$it ") } ||
-                // Starting an app is navigation, like open; a web address could carry data out, like open with a URI.
-                (part.startsWith("am start") && !Regex("https?:").containsMatchIn(part))
+        return shellParts(command).all { isReadOnlyPart(it) }
+    }
+
+    private fun shellParts(command: String) = command.split(Regex("&&|\\|\\||[;|\\n]")).map { it.trim() }.filter { it.isNotEmpty() }
+
+    private fun isReadOnlyPart(part: String) = readOnlyShell.any { part == it || part.startsWith("$it ") } ||
+        // Starting an app is navigation, like open; a web address could carry data out, like open with a URI.
+        // ("am startservice" is not: it commands an app.)
+        ((part == "am start" || part.startsWith("am start ")) && !WEB.containsMatchIn(part))
+
+    private val WEB = Regex("https?:")
+    private val PACKAGE = Regex("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+$")
+
+    /**
+     * A shell command's effect in words, by the verb of its first part that writes: "Changed setting screen_brightness",
+     * "Sent com.x a command", "Changed app com.x", "Pressed keys", "Opened example.com"; else "Ran a shell command".
+     * The command itself is the effect's [Effect.call], shown with developer details on.
+     */
+    fun shellLabel(command: String): String {
+        val part = shellParts(command).firstOrNull { !isReadOnlyPart(it) } ?: command.trim()
+        val words = part.split(Regex("\\s+")).map { it.trim('"', '\'') }
+        fun after(flag: String) = words.indexOf(flag).takeIf { it >= 0 }?.let { words.getOrNull(it + 1) }
+        return when {
+            words.size >= 4 && words[0] == "settings" && words[1] == "put" -> "Changed setting ${clip(words[3])}"
+            words.getOrNull(0) == "am" && words.getOrNull(1) in setOf("broadcast", "startservice", "start-service", "start-foreground-service") -> {
+                val pkg = (after("-n")?.substringBefore('/') ?: after("-p"))?.takeIf { PACKAGE.matches(it) }
+                "Sent ${pkg ?: "an app"} a command"
+            }
+            words[0] == "pm" -> words.drop(2).lastOrNull { PACKAGE.matches(it.substringBefore('/')) }
+                ?.let { "Changed app ${clip(it.substringBefore('/'))}" } ?: "Changed an app"
+            words[0] == "input" -> "Pressed keys"
+            words.getOrNull(0) == "am" && words.getOrNull(1) == "start" && WEB.containsMatchIn(part) ->
+                Regex("https?://([^/?#\"' :]+)").find(part)?.groupValues?.get(1)?.let { "Opened ${clip(it)}" } ?: "Opened a web address"
+            else -> "Ran a shell command"
         }
     }
 

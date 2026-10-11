@@ -19,6 +19,7 @@ import com.anthropic.models.messages.ToolResultBlockParam
 import com.anthropic.models.messages.ToolUseBlock
 import com.or1.agent.tools.ToolOutput
 import com.or1.agent.tools.Tools
+import com.or1.agent.ui.ResultCards
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
@@ -85,6 +86,8 @@ class Agent(
     private val tools: Tools,
     private val hooks: AgentHooks,
     private val transcript: Transcript,
+    /** Tell the model when a result shows as a card ([ResultCards.cardHint]); off for routines, whose reply is a notification. */
+    private val cardHints: Boolean = true,
 ) {
     private val messages = mutableListOf<MessageParam>()
     private var openCalls: List<ToolUseBlock> = emptyList()
@@ -213,10 +216,14 @@ class Agent(
         hooks.toolResult(name, output.text, false)
         hooks.toolDone(name, args, output)
         transcript.log(JSONObject().put("tool", name).put("args", args).put("result", output.text).put("image", output.jpegBase64 != null))
-        if (output.jpegBase64 == null) return result.content(output.text).build()
+        val hint = if (!cardHints) null else runCatching {
+            ResultCards.cardHint(name, args.keys().asSequence().associateWith { args.optString(it) }, output.text)
+        }.getOrNull()
+        val text = output.text + hint.orEmpty()
+        if (output.jpegBase64 == null) return result.content(text).build()
         return result.contentOfBlocks(
             listOf(
-                ToolResultBlockParam.Content.Block.ofText(output.text),
+                ToolResultBlockParam.Content.Block.ofText(text),
                 ToolResultBlockParam.Content.Block.ofImage(
                     Base64ImageSource.builder().data(output.jpegBase64).mediaType(Base64ImageSource.MediaType.IMAGE_JPEG).build()
                 ),

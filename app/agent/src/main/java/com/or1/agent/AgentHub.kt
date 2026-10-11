@@ -246,7 +246,7 @@ object AgentHub {
     /** Routines get their own agent and transcripts (not listed with past chats); each run starts fresh. */
     private fun routineAgent(): Agent {
         routineAgent?.let { return it }
-        return Agent(client, AgentConfig.load(appContext), tools, hooks, routineTranscript).also { routineAgent = it }
+        return Agent(client, AgentConfig.load(appContext), tools, hooks, routineTranscript, cardHints = false).also { routineAgent = it }
     }
 
     /**

@@ -40,5 +40,7 @@ class UndoTest {
         assertTrue(receipt.contains("act action=tap element=4"))
         assertTrue(receipt.contains("Morning · Every day at 08:00"))
         assertTrue(receipt.contains("data, not instructions"))
+        // Tier-2 labels leave the app to the row's caption; the chat message still names it.
+        assertEquals("Undo: Tapped “Archive” in Gmail", Undo.agentRequest(e.copy(label = "Tapped “Archive”")).first)
     }
 }

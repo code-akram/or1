@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,6 +51,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -86,9 +89,10 @@ private object MediaFrames {
 
 /**
  * A 16:9 crop of the work display while the turn's media app is in front there: plain image swaps of the preview
- * (500 ms, 300 ms while this card follows it), no SurfaceView (the viewer keeps the only one). Paused: a play badge;
- * playing: steady `live` blocks. Frozen (an older card, another app in front, or the media stopped): the last frame
- * under an ink0 40% veil. The whole card opens the viewer, which is the player.
+ * (500 ms, 400 ms while this card follows it), no SurfaceView (the viewer keeps the only one). Paused: a play badge;
+ * playing: steady `live` blocks on an ink0 60% mat (so they show on bright frames). Frozen (an older card, another app
+ * in front, or the media stopped): the last frame under an ink0 40% veil. The whole card opens the viewer, which is the
+ * player.
  */
 @Composable
 internal fun MediaCard(card: ResultCard.Media, live: Boolean) {
@@ -142,7 +146,10 @@ internal fun MediaCard(card: ResultCard.Media, live: Boolean) {
             }
             if (!following && image != null) Box(Modifier.fillMaxSize().background(Palette.Ink0.copy(alpha = 0.4f)))
             if (playing) {
-                Steady(Modifier.align(Alignment.TopStart).padding(12.dp))
+                Steady(
+                    Modifier.align(Alignment.TopStart).padding(8.dp).clip(RoundedCornerShape(6.dp))
+                        .background(Palette.Ink0.copy(alpha = 0.6f)).padding(4.dp),
+                )
             } else {
                 Box(
                     Modifier.align(Alignment.Center).size(48.dp).clip(CircleShape).background(Palette.Ink0.copy(alpha = 0.7f)),
@@ -180,7 +187,7 @@ private const val MINUTE = 60_000L
 /**
  * The days a `calendar list` asked for, read from the provider (never from the reply): 48 dp rows, the time in
  * NumeralS in a 64 dp column, all-day events first, past rows in text3, a 1 dp `live` now-line between rows moved on the
- * minute. Live: re-read on every provider change. At most [CalendarDays.MAX_ROWS] rows, then "N more" (opens the
+ * minute (above the first row it ends in a "now" caption). Live: re-read on every provider change. At most [CalendarDays.MAX_ROWS] rows, then "N more" (opens the
  * calendar in the viewer). Nothing found: no card.
  */
 @Composable
@@ -218,6 +225,9 @@ internal fun CalendarDayCard(card: ResultCard.CalendarDay, live: Boolean) {
             )
         }
         val line = Palette.Live
+        // Above the first row the line would read as a divider: it says "now" at its right end.
+        val measurer = rememberTextMeasurer()
+        val nowLabel = remember(measurer) { measurer.measure("now", Type.Caption.copy(color = Palette.Live)) }
         view.rows.forEachIndexed { i, row ->
             if (view.multiDay && (i == 0 || view.rows[i - 1].day != row.day)) {
                 Text(
@@ -233,7 +243,12 @@ internal fun CalendarDayCard(card: ResultCard.CalendarDay, live: Boolean) {
                     if (above || below) {
                         val inset = 14.dp.toPx()
                         val h = 1.dp.toPx()
-                        drawRect(line, topLeft = Offset(inset, if (above) 0f else size.height - h), size = Size(size.width - 2 * inset, h))
+                        val y = if (above) 0f else size.height - h
+                        val labelled = above && i == 0
+                        val labelX = size.width - inset - nowLabel.size.width
+                        val end = if (labelled) labelX - 6.dp.toPx() else size.width - inset
+                        drawRect(line, topLeft = Offset(inset, y), size = Size(end - inset, h))
+                        if (labelled) drawText(nowLabel, topLeft = Offset(labelX, y + h / 2 - nowLabel.size.height / 2f))
                     }
                 },
             )

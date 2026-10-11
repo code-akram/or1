@@ -54,19 +54,24 @@ the chat never leaves the screen.
   undo) and the reply in serif; it chimes when it lands (`Notifier.chime`; the old alert banners are gone). Until the
   stream has been in view at its bottom, the rail shows one `live` block after the wordmark. With no conversation
   the idle home shows, bottom-anchored (scrolls from the bottom when taller): today's routine acts, "Today · N"
-  (48 dp, opens Today) over the newest six of today's other effects as dimmed receipt rows (text3, Undo chips live),
+  (48 dp, opens Today; counts them all) over the newest six of today's other effects that can be undone or have an
+  evidence frame (`idleEffects`: shell commands and sends stay on Today) as dimmed receipt rows (text3, Undo chips live),
   then the serif greeting and the suggestions (`Suggestions.kt`: from notifications and battery, no API call).
 - `Cards.kt`: one **act card** per turn (`ActCard`): a header of step blocks (`Blocks.kt`, one 4 dp block per tool
   call, a block apart: unlit, ember while running, grey when done, red when failed; the app's only progress indicator)
-  with the current step while working and "N steps · <last step>" (Step, text2) once done; tap for every step. While
+  with the current step while working and "N steps · <last step that isn't navigation>" (`StepLabels.summary`: not "Read the screen", "Scrolled …",
+  "Pressed …"; Step, text2) once done; tap for every step. While
   the turn uses the work display (`AgentHub.usingWorkDisplay`) the evidence strip and "Watch or take over ·
   <app>" (48 dp, opens the viewer) sit under it, and collapse away when it's done; then the receipt rows. A turn with
   only reads (no effects, no work display) gets no card, just the header line (48 dp, expands). Result cards follow the
-  act card, then the reply in serif, all 8 dp apart; long-press a reply to copy it ("Copied" under it for 1.2 s). A
+  act card, then the reply in serif, all 8 dp apart; long-press a reply to copy it ("Copied" under it for 1.2 s); a
+  tap on it is a tap on the stream (`LocalStreamTap`: closes the composer). While the turn works, its media card waits
+  (the evidence strip is the live view); it shows when the turn ends. A
   receipt row (`ReceiptRow`, also Today's and the idle home's): ✓, `warn` plus an "irreversible" caption (tier 3), an
   undo arrow once undone; the past-tense label; a 48 dp Undo chip while `canUndo()` (tier 2 too, captioned "via or1
   · <app>", then "Undoing in <app>…" with the march); the label struck through and "Undone" after, the reason in red
-  if it failed, no chip once expired (each row wakes once at `expiresAt`, no ticking). Every card is `Shapes.card`
+  if it failed, no chip once expired (each row wakes once at `expiresAt`, no ticking). With developer details on, a
+  shell effect's command shows under its label (mono). Every card is `Shapes.card`
   (16 dp).
 - `EvidenceViews.kt`: the evidence strip, a 96 dp full-width crop of the work display's preview centred on the last
   tap with a 10 dp ember ring at `Evidence.lastTap` for `RING_MS` (720x1600 scaled to the crop; frames and the ring
@@ -92,14 +97,14 @@ the chat never leaves the screen.
   - Media: when the turn left a media app in front on the work display (the last screen read's `Foreground:` is a known
     media package or one seen holding a media session), a 16:9 crop of `HiddenDisplay.preview` (top of the screen for
     video apps, a little above the middle for audio) as plain image swaps, no SurfaceView. It follows frames only while
-    that app is in front, the card is on screen and the activity started, and asks for 300 ms frames meanwhile
+    that app is in front, the card is on screen and the activity started, and asks for 400 ms frames meanwhile
     (`HiddenDisplay.fastPreview`). Paused: a 48 dp ink0 70% play badge; playing (`NowState.media`): steady `live`
-    blocks top-left. App name and the session's title below. Older card, another app in front or the session stopped:
+    blocks top-left on an ink0 60% mat (4 dp padding, 6 dp corners) so they show on bright frames. App name and the session's title below. Older card, another app in front or the session stopped:
     the last frame under an ink0 40% veil. The whole card opens the viewer (`CardActions.openViewer`).
   - Calendar day: for a `calendar list` that found events, the asked-for days read from the provider
     (`CalendarTool.listRange` + `instances`), re-read on `NowState.calendarChanges`: 48 dp rows (time in NumeralS in a
     64 dp column, title, location), all-day first, past rows in text3, a 1 dp `live` now-line between rows moved on the
-    minute, day captions for a range, five rows then "N more" (opens the calendar on the work display in the viewer).
+    minute (above the first row it ends in a `live` "now" caption, so it doesn't read as a divider), day captions for a range, five rows then "N more" (opens the calendar on the work display in the viewer).
     An empty day gets no card.
   - Email: when the turn read a message in Gmail (`EmailReads.parse` of its screen reads: Archive in the toolbar, a
     Reply button with a "to me" line beside it, else no card): from, subject, three serif lines of the body; Open
@@ -228,7 +233,11 @@ expired, none). Reads and navigation aren't effects. `Effects.classify` is pure 
 | `act tap` on Send/Post/Pay/Delete/Call…, `clock dismiss_alarm`, `open` a URI, `shell` (unless every part only reads) | 3 | none |
 
 Taps by coordinates, unlabeled elements, typing and keys aren't effects (the tap that sends is). The tap's label, class
-and app are read before it runs.
+and app are read before it runs; only a tier-3 label names the app ("Tapped “Send” in Gmail": tier 2's caption already
+says "via or1 · Gmail"). A shell label says what the first writing part did, by its verb (`Effects.shellLabel`):
+"Changed setting <key>", "Sent <pkg> a command" (`am broadcast`/`startservice`), "Changed app <pkg>" (`pm`), "Pressed
+keys" (`input`), "Opened <host>" (`am start` with a web address), else "Ran a shell command"; the command is the
+effect's `call`.
 - Tools return the undo data in `ToolOutput.undo`, which never reaches the model; the text stays short ("dnd set to on
   (was off).").
 - `files/activity.jsonl`: `{"effect": …}` per effect and `{"undo": {"id", "state", "detail"}}` per state change,
@@ -423,6 +432,11 @@ The user doesn't use apps on this phone; the agent does. The app closes the syst
   the previous message in that chat (the conversation cache) to `files/request-gaps.jsonl`; `uv run or1-gaps` in
   `proto/` buckets them (< 5 min, 5-60 min, > 60 min, evals left out) to check the 1-hour TTL against real use.
   Debug: `--el backdate_chat_ms N` makes the chat look N ms more idle.
+- Card hints: a tool result the user will see as a result card (`ResultCards.cardHint`, next to `ResultCards.of`:
+  `calendar list` with events, `contacts find` with hits, `clock set_timer`/`set_alarm`, a Gmail message read) gets
+  "[The user sees this as a card. Reply in one short sentence.]" appended for the model only (the chat and transcript
+  keep the plain result), so the reply doesn't restate the card. Not for notifications (the reply must name what's
+  waiting and flag planted instructions) nor routine runs (their reply is a notification, no card).
 - Each user message starts with `[Now: <local time>]` (not the system prompt, which must stay byte-stable for the
   cache), so relative dates need no `device get` call.
 

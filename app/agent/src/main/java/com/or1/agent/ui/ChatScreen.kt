@@ -242,7 +242,8 @@ fun ChatScreen() {
                     }
                     val cardActions = remember { CardActions(openRoutines = { page = Page.ROUTINES }, openTriage = openTriage, openViewer = { closeComposer(); viewerOpen = true }) }
                     val openEvidence = remember { { e: com.or1.agent.Effect -> closeComposer(); evidence = e } }
-                    CompositionLocalProvider(LocalEvidenceViewer provides openEvidence) {
+                    val streamTap = remember { { closeComposer() } }
+                    CompositionLocalProvider(LocalEvidenceViewer provides openEvidence, LocalStreamTap provides streamTap) {
                         Box(Modifier.fillMaxSize().background(Palette.Ink0)) {
                             Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
                                 TopBar(
@@ -438,7 +439,10 @@ fun TurnView(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = modifier) {
         turn.user?.let { UserBubble(it) }
         if (turn.toolCalls.isNotEmpty() || active || receipt.isNotEmpty()) ActCard(turn, active, receipt, onOpenPreview)
-        for (card in cards) key(card.key) { ResultCardView(card, card.key in live) }
+        for (card in cards) key(card.key) {
+            // While working, the evidence strip is the live view of the work display: the media card waits for the end.
+            if (!(active && card is ResultCard.Media)) ResultCardView(card, card.key in live)
+        }
         for (info in turn.infos) InfoLine(info)
         turn.reply?.let { ReplyBlock(it) } ?: turn.draft?.let { ReplyBlock(ChatItem.Reply(it.id, it.text, 0.0, 0.0)) }
     }

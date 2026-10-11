@@ -36,6 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -119,11 +120,18 @@ fun UserBubble(item: ChatItem.User) {
     }
 }
 
-/** The agent's reply: prose, no bubble. Long-press copies it ("Copied" under it for 1.2 s; no toast). */
+/** What a tap on the stream's own surface does (closes the composer); prose that takes taps passes them on. */
+val LocalStreamTap = staticCompositionLocalOf<() -> Unit> { {} }
+
+/**
+ * The agent's reply: prose, no bubble. Long-press copies it ("Copied" under it for 1.2 s; no toast); a tap is a tap on
+ * the stream ([LocalStreamTap]).
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ReplyBlock(item: ChatItem.Reply) {
     val clipboard = LocalClipboardManager.current
+    val onTap = LocalStreamTap.current
     var copies by remember { mutableIntStateOf(0) }
     var copied by remember { mutableStateOf(false) }
     LaunchedEffect(copies) {
@@ -135,7 +143,7 @@ fun ReplyBlock(item: ChatItem.Reply) {
     Column(
         Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = {}, onLongClick = { clipboard.setText(AnnotatedString(item.text)); copies++ }),
+            .combinedClickable(onClick = onTap, onLongClick = { clipboard.setText(AnnotatedString(item.text)); copies++ }),
     ) {
         for (block in parseBlocks(item.text)) {
             if (block.code) {
@@ -185,7 +193,7 @@ private fun inline(text: String): AnnotatedString = buildAnnotatedString {
 
 /**
  * One act's work and what it changed, in one card (docs/ui-ledger.md §4): a header of step blocks (one per tool call)
- * with the current step while working, "N steps · <last step>" once done (tap: every step; with developer details
+ * with the current step while working, "N steps · <what it did>" once done (tap: every step; with developer details
  * on, tap a step for the raw call and result); while the work display is in use, the evidence strip and "Watch or take
  * over"; then the receipt. A turn with only reads (no effects, no work display) gets no card: the header line alone.
  */
@@ -197,7 +205,7 @@ fun ActCard(turn: Turn, active: Boolean, receipt: List<Effect>, onOpenPreview: (
         if (active && states.none { it == StepState.RUNNING }) states + StepState.UNLIT else states
     }
     val latest = calls.lastOrNull()?.label ?: (turn.steps.lastOrNull() as? ChatItem.Thinking)?.let { "Thinking" }
-    val title = if (active) latest ?: "Working" else stepsTitle(calls.size, latest)
+    val title = if (active) latest ?: "Working" else stepsTitle(calls.size, StepLabels.summary(calls.map { it.label }) ?: latest)
     // Only the turn in progress follows the work display.
     val usingDisplay = if (active) AgentHub.usingWorkDisplay.collectAsState().value else false
     ActFrame(blocks, title, active, receipt, usingDisplay, onOpenPreview, expandKey = turn.key) {
@@ -209,7 +217,7 @@ fun ActCard(turn: Turn, active: Boolean, receipt: List<Effect>, onOpenPreview: (
     }
 }
 
-/** "1 step", "3 steps · Set an alarm for 07:30". */
+/** "1 step", "3 steps · Set an alarm for 07:30" (the last step that isn't navigation, [StepLabels.summary]). */
 fun stepsTitle(count: Int, last: String?): String = (if (count == 1) "1 step" else "$count steps") + (last?.let { " · $it" } ?: "")
 
 /**
@@ -368,6 +376,13 @@ fun ReceiptRow(
                 overflow = TextOverflow.Ellipsis,
             )
             caption?.let { Text(it, style = Type.Caption, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            // The label says what a shell command did; the command itself is a developer detail.
+            if (effect.tool == "shell" && DeveloperDetails.on) {
+                Text(
+                    effect.call.substringAfter("command=", effect.call), style = Type.Mono.copy(color = Palette.Text3),
+                    maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp),
+                )
+            }
             if (state == UndoState.FAILED) {
                 Text(
                     "Couldn't undo" + (effect.detail?.let { ": $it" } ?: "."),

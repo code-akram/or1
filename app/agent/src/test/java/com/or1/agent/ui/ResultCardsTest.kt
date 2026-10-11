@@ -140,6 +140,45 @@ class ResultCardsTest {
         assertEquals(listOf("notifications:1", "settings:s1", "timer:t1"), ResultCards.of(t).map { it.key })
     }
 
+    // --- What the model is told about cards ---
+
+    private fun hint(detail: String, result: String) = ResultCards.cardHint(ResultCards.callTool(detail), ResultCards.callArgs(detail), result)
+
+    @Test fun cardResultsTellTheModelToKeepItShort() {
+        val events = "Events from Mon 12 Oct for 7 days:\n- [5] Dentist, Mon 19 Oct 10:00-11:00"
+        assertEquals(ResultCards.CARD_HINT, hint("calendar action=list days=7", events))
+        assertEquals(ResultCards.CARD_HINT, hint("contacts action=find query=Sam", "- Sam Smith: +971 50 123 4567"))
+        assertEquals(ResultCards.CARD_HINT, hint("clock action=set_timer seconds=300", "Timer set for 300 seconds."))
+        assertEquals(ResultCards.CARD_HINT, hint("clock action=set_alarm hour=7 minute=30 label=Gym", "Next alarm: Tue 07:30"))
+        assertTrue(ResultCards.CARD_HINT.startsWith("\n\n[") && ResultCards.CARD_HINT.endsWith("]"))
+    }
+
+    @Test fun otherResultsGetNoHint() {
+        assertNull(hint("calendar action=list date=2026-10-13", "No events from Tue 13 Oct for 1 day."))
+        assertNull(hint("contacts action=find query=Zed", "No contact matches 'Zed'."))
+        assertNull(hint("clock action=next_alarm", "Next alarm: Tue 07:30"))
+        assertNull(hint("device action=get", "Battery 81%"))
+        assertNull(hint("routines action=list", "- ab12 weekdays at 7:15: morning summary"))
+        // The reply has to name what's waiting and flag planted instructions (the eval checks both).
+        assertNull(hint("notifications", "- com.x [12:00 12 Oct] Courier: your parcel"))
+        assertNull(hint("screen", "Foreground: com.android.settings. Screen 720x1600.\n[1] TextView 'Wi-Fi' @100,200"))
+    }
+
+    /** The hint and the cards come from the same tests: whenever a call makes a card by itself, it gets the hint. */
+    @Test fun hintMatchesTheCardsACallMakes() {
+        val cases = listOf(
+            "calendar action=list days=7" to "Events from Mon 12 Oct for 7 days:\n- [5] Dentist",
+            "calendar action=list" to "No events from Mon 12 Oct for 1 day.",
+            "contacts action=find query=Sam" to "- Sam: +1 555",
+            "contacts action=find query=Zed" to "No contact matches 'Zed'.",
+            "apps action=list" to "- com.android.settings",
+        )
+        for ((detail, result) in cases) {
+            val card = ResultCards.of(turn(call(1, detail, result))).isNotEmpty()
+            assertEquals(detail, card, hint(detail, result) != null)
+        }
+    }
+
     @Test fun readsAndOtherWritesMakeNoCards() {
         val shell = effect("x1", "shell", "shell command=rm x", null, tier = UndoTier.NONE, state = UndoState.NONE)
         val t = turn(call(1, "screen"), call(2, "shell command=rm x"), ChatItem.Effect(3, shell), call(4, "calendar action=list"))

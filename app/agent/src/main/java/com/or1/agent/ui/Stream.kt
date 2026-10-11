@@ -27,7 +27,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.or1.agent.AgentHub
 import com.or1.agent.ChatItem
+import com.or1.agent.Effect
 import com.or1.agent.RoutineAct
+import com.or1.agent.UndoTier
 import com.or1.agent.today
 
 /** One entry of the chat stream: a turn of the conversation, or a routine run from today. */
@@ -92,9 +94,16 @@ fun RoutineActView(act: RoutineAct, modifier: Modifier = Modifier) {
 private const val IDLE_EFFECTS = 6
 
 /**
+ * The idle home's rows from today's effects (newest first): only what can be undone or has a frame to show, so shell
+ * commands and sends don't crowd it. They stay on Today, and in its count.
+ */
+fun idleEffects(today: List<Effect>, max: Int = IDLE_EFFECTS): List<Effect> =
+    today.filter { it.tier != UndoTier.NONE || it.evidence != null }.take(max)
+
+/**
  * The idle home (an empty conversation; docs/ui-ledger.md §1, "no empty state"), bottom-anchored above the composer:
  * today's routine acts, then "Today · N" (opens Today) over the newest of today's effects as dimmed receipt rows with
- * live Undo chips (a routine act's own effects are left to its card), then the greeting and suggestions. Scrolls when
+ * live Undo chips ([idleEffects]; a routine act's own effects are left to its card), then the greeting and suggestions. Scrolls when
  * it's taller than the screen, starting at the bottom. [onAtBottom] follows whether the bottom is in view.
  */
 @Composable
@@ -104,10 +113,11 @@ fun IdleHome(
 ) {
     val effects by AgentHub.effects.collectAsState()
     val today = remember(effects) { effects.today() }
-    val shown = remember(today, acts) {
+    val listed = remember(today, acts) {
         val inActs = acts.flatMap { a -> a.effects.map { it.id } }.toSet()
-        today.filter { it.id !in inActs }.take(IDLE_EFFECTS)
+        today.filter { it.id !in inActs }
     }
+    val shown = remember(listed) { idleEffects(listed) }
     val scroll = rememberScrollState()
     ReportAtBottom(scroll, onAtBottom)
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -118,7 +128,7 @@ fun IdleHome(
             for (act in acts) key(act.id) {
                 RoutineActView(act, Modifier.padding(start = 4.dp, end = 4.dp, top = 8.dp, bottom = 12.dp))
             }
-            if (shown.isNotEmpty()) {
+            if (listed.isNotEmpty()) {
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClickLabel = "Open Today", onClick = onToday).padding(horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -136,7 +146,7 @@ fun IdleHome(
             }
             Text(
                 greeting, style = Type.CaptionSerif, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(start = 8.dp, top = if (shown.isNotEmpty()) 16.dp else 0.dp, bottom = 4.dp),
+                modifier = Modifier.padding(start = 8.dp, top = if (listed.isNotEmpty()) 16.dp else 0.dp, bottom = 4.dp),
             )
             Column(Modifier.padding(bottom = 4.dp)) {
                 for (s in suggestions) SuggestionRow(s) { onSuggestion(s) }

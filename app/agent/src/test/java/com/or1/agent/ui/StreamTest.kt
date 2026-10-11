@@ -1,7 +1,10 @@
 package com.or1.agent.ui
 
 import com.or1.agent.ChatItem
+import com.or1.agent.Effect
 import com.or1.agent.RoutineAct
+import com.or1.agent.UndoState
+import com.or1.agent.UndoTier
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -33,6 +36,25 @@ class StreamTest {
         // "New chat: …" is its own turn just before the request.
         val t = turns(ChatItem.Info(1, "New chat"), ChatItem.User(2, "a", at = 5_000), ChatItem.Reply(3, "ok", 0.0, 0.0))
         assertEquals(listOf("mid", "turn0", "turn1"), keys(interleave(t, listOf(act("mid", 3_000)))))
+    }
+
+    @Test fun idleHomeListsWhatCanBeUndoneOrHasAFrame() {
+        fun e(id: String, tier: UndoTier, evidence: String? = null) = Effect(
+            id, 0, "chat", null, null, "x", "x", id, tier, null, UndoState.AVAILABLE, evidence = evidence,
+        )
+        val today = listOf(
+            e("shell", UndoTier.NONE), e("dnd", UndoTier.LOCAL), e("send", UndoTier.NONE, evidence = "/e.webp"),
+            e("archive", UndoTier.AGENT), e("shell2", UndoTier.NONE),
+        )
+        assertEquals(listOf("dnd", "send", "archive"), idleEffects(today).map { it.id })
+        assertEquals(listOf("dnd", "send"), idleEffects(today, max = 2).map { it.id })
+    }
+
+    @Test fun anActIsSummedUpByWhatItDidNotHowItGotThere() {
+        assertEquals("Tapped “Archive”", StepLabels.summary(listOf("Opened Gmail", "Read the screen", "Tapped “Archive”", "Read the screen", "Pressed back")))
+        assertEquals("Opened Settings", StepLabels.summary(listOf("Opened Settings", "Scrolled down", "Looked at the screen")))
+        assertEquals("Read the screen", StepLabels.summary(listOf("Read the screen", "Scrolled down", "Read the screen")))
+        assertEquals(null, StepLabels.summary(emptyList()))
     }
 
     @Test fun noTurnsIsJustTheActs() {

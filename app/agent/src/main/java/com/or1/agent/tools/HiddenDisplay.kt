@@ -108,7 +108,7 @@ object HiddenDisplay {
      */
     @Volatile
     private var previewInterval = PREVIEW_INTERVAL_MS
-    const val FAST_PREVIEW_MS = 300L
+    const val FAST_PREVIEW_MS = 400L
 
     /** Converts frames every [FAST_PREVIEW_MS] instead of every 500 ms; the live media card sets it while it shows playback. */
     fun fastPreview(fast: Boolean) {

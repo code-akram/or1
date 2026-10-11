@@ -191,8 +191,8 @@ object ResultCards {
         if (people.isNotEmpty()) {
             out += finds.first().id to ResultCard.Contacts(people.take(MAX_PEOPLE), (people.size - MAX_PEOPLE).coerceAtLeast(0), null, finds.first().id)
         }
-        // The last `calendar list` that found something (an empty day gets no card: the reply says so).
-        calls.lastOrNull { callTool(it.detail) == "calendar" && callArgs(it.detail)["action"] == "list" && it.result!!.startsWith("Events from") }
+        // The last `calendar list` that found something.
+        calls.lastOrNull { callTool(it.detail) == "calendar" && isCalendarCard(callArgs(it.detail), it.result!!) }
             ?.let { val args = callArgs(it.detail); out += it.id to ResultCard.CalendarDay(it.id, args["date"], args["days"]) }
         // What the work display was left showing: a media app gets the live crop.
         val screens = calls.filter { callTool(it.detail) in SCREEN_TOOLS }
@@ -202,11 +202,35 @@ object ResultCards {
         }
         // The last message read in Gmail.
         screens.asReversed().firstNotNullOfOrNull { call ->
-            // A parser bug must never take down the home screen.
-            if (ScreenDump.foreground(call.result!!) != EmailReads.GMAIL) null else runCatching { EmailReads.parse(call.result) }.getOrNull()?.let { call.id to it }
+            emailRead(call.result!!)?.let { call.id to it }
         }?.let { (id, email) -> out += id to ResultCard.Email(id, email) }
         return out.sortedBy { it.first }.map { it.second }
     }
+
+    /**
+     * What the model is told after a call whose result the user sees as a card: the cards are drawn here, from the
+     * calls, so the model can't know, and its reply would restate the card. Null for any other result. Mirrors [of]
+     * (they share its tests): `calendar list` with events, `contacts find` with hits, a Gmail message read, a timer
+     * or alarm set. Not the notifications card: the reply has to name what's waiting and flag planted instructions.
+     */
+    fun cardHint(tool: String, args: Map<String, String>, result: String): String? = when {
+        tool == "calendar" && isCalendarCard(args, result) -> CARD_HINT
+        tool == "contacts" && args["action"] == "find" && parseFound(result).isNotEmpty() -> CARD_HINT
+        tool == "clock" && args["action"] in setOf("set_timer", "set_alarm") -> CARD_HINT
+        // Gmail is often read mid-task, and "reply" is a button there: a conditional hint without the word.
+        tool in SCREEN_TOOLS && emailRead(result) != null -> EMAIL_HINT
+        else -> null
+    }
+
+    const val CARD_HINT = "\n\n[The user sees this as a card. Reply in one short sentence.]"
+    const val EMAIL_HINT = "\n\n[The user sees this email as a card. If it is your answer, keep your message to one short sentence.]"
+
+    /** `calendar list` that found something (an empty day gets no card: the reply says so). */
+    private fun isCalendarCard(args: Map<String, String>, result: String) = args["action"] == "list" && result.startsWith("Events from")
+
+    /** The message a screen read shows in Gmail, if any. A parser bug must never take down the home screen. */
+    private fun emailRead(result: String): EmailRead? =
+        if (ScreenDump.foreground(result) != EmailReads.GMAIL) null else runCatching { EmailReads.parse(result) }.getOrNull()
 
     /** The receipt rows left once [cards] took theirs: an effect shows in one place only. */
     fun receipt(turn: Turn, cards: List<ResultCard>): List<ChatItem.Effect> {

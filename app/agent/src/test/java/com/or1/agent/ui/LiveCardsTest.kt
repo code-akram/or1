@@ -9,6 +9,7 @@ import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -325,6 +326,17 @@ class LiveCardsTest {
         val card = ResultCards.of(t).single() as ResultCard.Email
         assertEquals(2L, card.callId)
         assertEquals("Your order has shipped", card.email.subject)
+    }
+
+    @Test fun anEmailReadTellsTheModelItShowsAsACard() {
+        val inbox = screen("com.google.android.gm", "[1] Button 'Compose' @560,1400 click")
+        assertEquals(ResultCards.EMAIL_HINT, ResultCards.cardHint("act", mapOf("action" to "tap", "element" to "4"), message))
+        assertEquals(ResultCards.EMAIL_HINT, ResultCards.cardHint("screen", emptyMap(), captured))
+        assertNull(ResultCards.cardHint("open", mapOf("package" to "com.google.android.gm"), inbox))
+        // Never "reply": in Gmail that's a button.
+        assertFalse(ResultCards.EMAIL_HINT.contains("reply", ignoreCase = true))
+        // Garbage can't throw out of the predicate the agent loop calls.
+        assertNull(ResultCards.cardHint("screen", emptyMap(), "Foreground: com.google.android.gm. Screen 720x1600.\n[x] ???"))
     }
 
     @Test fun longQuotesAreCut() {
