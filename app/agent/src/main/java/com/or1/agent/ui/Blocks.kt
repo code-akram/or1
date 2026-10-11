@@ -17,8 +17,8 @@ import androidx.compose.ui.unit.dp
 import com.or1.agent.ChatItem
 import kotlinx.coroutines.delay
 
-/** Pixel blocks in cards are 3 dp (the rail's are 2, the drawer wordmark's 5). */
-val CARD_BLOCK: Dp = 3.dp
+/** Pixel blocks in cards are 4 dp (the rail's are 2, the drawer wordmark's 5): 3 dp read as specks at 320 dpi. */
+val CARD_BLOCK: Dp = 4.dp
 
 enum class StepState(val color: Color) {
     UNLIT(Palette.Line), RUNNING(Palette.Ember), DONE(Palette.Text2), FAILED(Palette.Error);

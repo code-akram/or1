@@ -10,19 +10,16 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -42,7 +39,6 @@ import androidx.compose.ui.unit.dp
 import com.or1.agent.AgentHub
 import com.or1.agent.Routine
 import com.or1.agent.Routines
-import com.or1.agent.tools.HiddenDisplay
 import org.json.JSONObject
 
 /**
@@ -55,7 +51,6 @@ fun RoutinesView(onClose: () -> Unit, onOpenPreview: () -> Unit) {
     val items by AgentHub.routineItems.collectAsState()
     val busy by AgentHub.routineBusy.collectAsState()
     val chatBusy by AgentHub.busy.collectAsState()
-    val preview by HiddenDisplay.preview.collectAsState()
     val turns = remember(items) { groupTurns(items) }
     var editing by remember { mutableStateOf<String?>(null) }
     var renaming by remember { mutableStateOf<String?>(null) }
@@ -67,11 +62,7 @@ fun RoutinesView(onClose: () -> Unit, onOpenPreview: () -> Unit) {
         if (turns.isNotEmpty()) list.animateScrollToItem(list.layoutInfo.totalItemsCount - 1, scrollOffset = Int.MAX_VALUE / 2)
     }
     Column(Modifier.fillMaxSize().background(Palette.Ink0).systemBarsPadding()) {
-        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconCircle(Icons.Back, "Back", onClose, tint = Palette.Text, background = Palette.Ink3)
-            Spacer(Modifier.width(12.dp))
-            Text("Routines", style = Type.Label)
-        }
+        PageHeader("Routines", onClose)
         Box(Modifier.fillMaxSize()) {
         LazyColumn(
             Modifier.fillMaxSize(),
@@ -114,7 +105,7 @@ fun RoutinesView(onClose: () -> Unit, onOpenPreview: () -> Unit) {
                     val last = turn === turns.last()
                     val active = last && busy
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TurnView(turn, active = active, preview = if (last) preview else null, onOpenPreview)
+                        TurnView(turn, active = active, onOpenPreview)
                         val user = turn.user
                         val reply = turn.reply
                         if (user != null && reply != null && !active && !chatBusy) {
@@ -140,8 +131,8 @@ fun RoutinesView(onClose: () -> Unit, onOpenPreview: () -> Unit) {
 @Composable
 private fun RoutineRow(routine: Routine, onEdit: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit, modifier: Modifier = Modifier) {
     Row(
-        modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Palette.Ink2)
-            .border(1.dp, Palette.Line, RoundedCornerShape(16.dp)).clickable(onClick = onEdit)
+        modifier.fillMaxWidth().clip(Shapes.card).background(Palette.Ink2)
+            .border(1.dp, Palette.Line, Shapes.card).clickable(onClick = onEdit)
             .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -173,8 +164,8 @@ private fun RoutineEditor(routine: Routine, onDone: () -> Unit) {
     var contains by remember { mutableStateOf(routine.textContains.orEmpty()) }
     var error by remember { mutableStateOf<String?>(null) }
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Palette.Ink2)
-            .border(1.dp, Palette.LineStrong, RoundedCornerShape(16.dp)).padding(16.dp),
+        Modifier.fillMaxWidth().clip(Shapes.card).background(Palette.Ink2)
+            .border(1.dp, Palette.LineStrong, Shapes.card).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Field("Name (optional)", name, { name = it })

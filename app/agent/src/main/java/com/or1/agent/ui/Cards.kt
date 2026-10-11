@@ -1,10 +1,9 @@
 package com.or1.agent.ui
 
-import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -14,7 +13,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
@@ -29,8 +27,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
@@ -40,8 +40,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -61,7 +59,7 @@ import com.or1.agent.UndoState
 import com.or1.agent.UndoTier
 import kotlinx.coroutines.delay
 
-/** One request and everything it produced, so a turn's tool steps collapse into a single working card. */
+/** One request and everything it produced, so a turn's tool steps collapse into a single act card. */
 data class Turn(
     val user: ChatItem.User?,
     val steps: List<ChatItem>,          // Thinking and ToolCall, in order
@@ -73,8 +71,6 @@ data class Turn(
 ) {
     val key: Long get() = user?.id ?: steps.firstOrNull()?.id ?: reply?.id ?: infos.firstOrNull()?.id ?: 0L
     val toolCalls get() = steps.filterIsInstance<ChatItem.ToolCall>()
-    /** Did this turn drive an app (so the work-screen thumbnail is relevant)? */
-    val usedScreen get() = toolCalls.any { it.detail.substringBefore(' ') in setOf("open", "act", "screen") }
 }
 
 fun groupTurns(items: List<ChatItem>): List<Turn> {
@@ -123,15 +119,23 @@ fun UserBubble(item: ChatItem.User) {
     }
 }
 
-/** The agent's reply: prose, no bubble. Long-press copies it. */
+/** The agent's reply: prose, no bubble. Long-press copies it ("Copied" under it for 1.2 s; no toast). */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ReplyBlock(item: ChatItem.Reply) {
     val clipboard = LocalClipboardManager.current
+    var copies by remember { mutableIntStateOf(0) }
+    var copied by remember { mutableStateOf(false) }
+    LaunchedEffect(copies) {
+        if (copies == 0) return@LaunchedEffect
+        copied = true
+        delay(1200)
+        copied = false
+    }
     Column(
         Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = {}, onLongClick = { clipboard.setText(AnnotatedString(item.text)) }),
+            .combinedClickable(onClick = {}, onLongClick = { clipboard.setText(AnnotatedString(item.text)); copies++ }),
     ) {
         for (block in parseBlocks(item.text)) {
             if (block.code) {
@@ -153,6 +157,7 @@ fun ReplyBlock(item: ChatItem.Reply) {
             Spacer(Modifier.height(6.dp))
             Text("$%.4f · %.1f s".format(item.cost, item.seconds), style = Type.Caption.copy(fontFeatureSettings = "tnum"))
         }
+        if (copied) Text("Copied", style = Type.Caption, modifier = Modifier.padding(top = 4.dp))
     }
 }
 
@@ -179,77 +184,90 @@ private fun inline(text: String): AnnotatedString = buildAnnotatedString {
 }
 
 /**
- * One card per turn for the agent's work: step blocks (one per tool call), the current step (or "3 steps" once done)
- * and the live thumbnail of the hidden work screen. Expands to every step; with developer details on, tapping a step
- * shows the raw call and result.
+ * One act's work and what it changed, in one card (docs/ui-ledger.md §4): a header of step blocks (one per tool call)
+ * with the current step while working, "N steps · <last step>" once done (tap: every step; with developer details
+ * on, tap a step for the raw call and result); while the work display is in use, the evidence strip and "Watch or take
+ * over"; then the receipt. A turn with only reads (no effects, no work display) gets no card: the header line alone.
  */
 @Composable
-fun WorkCard(turn: Turn, active: Boolean, preview: Bitmap?, onOpenPreview: () -> Unit) {
-    var expanded by rememberSaveable(turn.key) { mutableStateOf(false) }
+fun ActCard(turn: Turn, active: Boolean, receipt: List<Effect>, onOpenPreview: () -> Unit) {
     val calls = turn.toolCalls
-    val shape = RoundedCornerShape(20.dp)
-    val showThumbnail = preview != null && turn.usedScreen
     val blocks = calls.map { StepState.of(it, active) }.let { states ->
         // While or1 thinks between calls, an unlit block stands for the step to come.
         if (active && states.none { it == StepState.RUNNING }) states + StepState.UNLIT else states
     }
     val latest = calls.lastOrNull()?.label ?: (turn.steps.lastOrNull() as? ChatItem.Thinking)?.let { "Thinking" }
-    // The text sets the card's height; the thumbnail fills it (cropped to the top of the work screen), so the
-    // card stays as compact as its content.
-    Box(
+    val title = if (active) latest ?: "Working" else stepsTitle(calls.size, latest)
+    // Only the turn in progress follows the work display.
+    val usingDisplay = if (active) AgentHub.usingWorkDisplay.collectAsState().value else false
+    ActFrame(blocks, title, active, receipt, usingDisplay, onOpenPreview, expandKey = turn.key) {
+        for (step in turn.steps) when (step) {
+            is ChatItem.Thinking -> Text(step.text, style = Type.Step.copy(fontStyle = FontStyle.Italic, color = Palette.Text3), maxLines = 6)
+            is ChatItem.ToolCall -> StepRow(step, active)
+            else -> {}
+        }
+    }
+}
+
+/** "1 step", "3 steps · Set an alarm for 07:30". */
+fun stepsTitle(count: Int, last: String?): String = (if (count == 1) "1 step" else "$count steps") + (last?.let { " · $it" } ?: "")
+
+/**
+ * The act card's frame, for chat turns and routine acts alike. Framed (ink2, 16 dp, hairline; `lineStrong` while
+ * [active]) only when it holds more than its header: receipt rows or the evidence strip, which stays framed until its
+ * collapse has finished. [steps] (null: not expandable) is what the header expands to.
+ */
+@Composable
+internal fun ActFrame(
+    blocks: List<StepState>, title: String, active: Boolean, receipt: List<Effect>, evidence: Boolean,
+    onOpenPreview: () -> Unit, expandKey: Any, steps: (@Composable () -> Unit)?,
+) {
+    var expanded by rememberSaveable(expandKey) { mutableStateOf(false) }
+    val strip = remember { MutableTransitionState(evidence) }
+    strip.targetState = evidence
+    val framed = receipt.isNotEmpty() || strip.currentState || strip.targetState
+    val inset = if (framed) 14.dp else 0.dp
+    Column(
         Modifier
             .fillMaxWidth()
-            .clip(shape)
-            .background(Palette.Ink2)
-            .border(1.dp, if (active) Palette.LineStrong else Palette.Line, shape)
-            .animateContentSize(Motion.layout())
-            .padding(horizontal = 14.dp, vertical = 6.dp),
+            .then(
+                if (framed) Modifier.clip(Shapes.card).background(Palette.Ink2).border(1.dp, if (active) Palette.LineStrong else Palette.Line, Shapes.card)
+                else Modifier,
+            )
+            .animateContentSize(Motion.layout()),
     ) {
-        Column(Modifier.fillMaxWidth().padding(end = if (showThumbnail) 62.dp else 0.dp)) {
-            Row(
-                Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { expanded = !expanded },
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                .then(if (steps != null) Modifier.clickable { expanded = !expanded } else Modifier)
+                .padding(start = inset, end = if (framed) 12.dp else 0.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (blocks.isNotEmpty()) {
                 StepBlocks(blocks)
                 Spacer(Modifier.width(12.dp))
-                if (active) {
-                    // The current step itself, steady: the blocks and the rail show that it's moving.
-                    Text(latest ?: "Working", style = Type.Step.copy(color = Palette.Text), maxLines = 2, modifier = Modifier.weight(1f))
-                } else {
-                    val count = if (calls.size == 1) "1 step" else "${calls.size} steps"
-                    Text(count, style = Type.Label, modifier = Modifier.weight(1f))
-                }
+            }
+            // The current step itself, steady: the blocks and the rail show that it's moving.
+            Text(
+                title, style = Type.Step.copy(color = if (active) Palette.Text else Palette.Text2), maxLines = 2,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+            )
+            if (framed && steps != null) {
                 Icon(if (expanded) Icons.ExpandLess else Icons.ExpandMore, null, tint = Palette.Text3, modifier = Modifier.size(20.dp))
             }
-            if (!expanded && !active && latest != null) {
-                Text(latest, style = Type.Step, maxLines = 2, modifier = Modifier.padding(bottom = 8.dp))
-            }
+        }
+        if (steps != null) {
             AnimatedVisibility(expanded, enter = Motion.expand, exit = Motion.collapse) {
-                Column(Modifier.padding(bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for (step in turn.steps) when (step) {
-                        is ChatItem.Thinking -> Text(step.text, style = Type.Step.copy(fontStyle = FontStyle.Italic, color = Palette.Text3), maxLines = 6)
-                        is ChatItem.ToolCall -> StepRow(step, active)
-                        else -> {}
-                    }
-                }
+                Column(Modifier.padding(start = inset, end = inset, bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { steps() }
             }
         }
-        if (showThumbnail) {
-            Box(Modifier.matchParentSize(), contentAlignment = Alignment.TopEnd) {
-                Image(
-                    preview.asImageBitmap(),
-                    contentDescription = "Agent screen. Tap to view.",
-                    contentScale = ContentScale.Crop,
-                    alignment = Alignment.TopCenter,
-                    modifier = Modifier
-                        .width(50.dp)
-                        .heightIn(min = 48.dp, max = 111.dp)
-                        .fillMaxHeight()
-                        .clip(RoundedCornerShape(10.dp))
-                        .border(1.dp, Palette.Line, RoundedCornerShape(10.dp))
-                        .clickable(onClick = onOpenPreview),
-                )
+        AnimatedVisibility(strip, enter = Motion.expand, exit = Motion.collapse) {
+            Column {
+                EvidenceStrip(onOpenPreview)
+                WatchRow(onOpenPreview)
             }
+        }
+        for (effect in receipt) key(effect.id) {
+            ReceiptRow(effect, { AgentHub.undo(it.id) }, Modifier.hairlineTop().padding(start = 14.dp, end = 4.dp))
         }
     }
 }
@@ -261,7 +279,8 @@ private fun StepRow(step: ChatItem.ToolCall, active: Boolean) {
     val details = DeveloperDetails.on
     Column(Modifier.fillMaxWidth().then(if (details) Modifier.heightIn(min = 48.dp).clickable { open = !open } else Modifier)) {
         Row(verticalAlignment = Alignment.Top) {
-            StepBlocks(listOf(StepState.of(step, active)), Modifier.padding(top = 9.dp))
+            // Centred on the first line (Step is 20 sp tall).
+            StepBlocks(listOf(StepState.of(step, active)), Modifier.padding(top = 8.dp))
             Spacer(Modifier.width(10.dp))
             Text(step.label, style = Type.Step)
         }
@@ -270,7 +289,7 @@ private fun StepRow(step: ChatItem.ToolCall, active: Boolean) {
                 step.detail + (step.result?.let { "\n\n" + it.take(1200) } ?: ""),
                 style = Type.Mono,
                 modifier = Modifier
-                    .padding(start = 13.dp, top = 6.dp)
+                    .padding(start = 14.dp, top = 6.dp)
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(10.dp))
                     .background(Palette.Ink1)
@@ -280,27 +299,13 @@ private fun StepRow(step: ChatItem.ToolCall, active: Boolean) {
     }
 }
 
-/**
- * The receipt under a turn's work card: one row per side effect, with Undo where there's an inverse. Reads and
- * navigation aren't effects; they stay in the card's "N steps".
- */
+/** The receipt container on its own (Today's days): ink2, 16 dp, hairline; rows go in with [hairlineTop] between. */
 @Composable
-fun Receipt(effects: List<ChatItem.Effect>, onUndo: (Effect) -> Unit = { AgentHub.undo(it.id) }) {
-    val shape = RoundedCornerShape(16.dp)
+fun ReceiptContainer(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(Palette.Ink2)
-            .border(1.dp, Palette.Line, shape)
+        modifier.fillMaxWidth().clip(Shapes.card).background(Palette.Ink2).border(1.dp, Palette.Line, Shapes.card)
             .animateContentSize(Motion.layout()),
-    ) {
-        effects.forEachIndexed { i, item ->
-            key(item.effect.id) {
-                ReceiptRow(item.effect, onUndo, (if (i > 0) Modifier.hairlineTop() else Modifier).padding(start = 14.dp, end = 4.dp))
-            }
-        }
-    }
+    ) { content() }
 }
 
 /** A 1 dp `line` rule along the top edge, between rows. */
@@ -309,13 +314,17 @@ fun Modifier.hairlineTop(): Modifier = drawBehind {
 }
 
 /**
- * One side effect: glyph (✓ done, `warn` for irreversible, the march while its undo runs), the past-tense label and
- * the undo state: an Undo chip while it can be undone ("Ask or1 to undo" when the agent has to do it), "Undone"
- * with the label struck through, the reason when the undo failed, nothing once it has expired. [time] and [source]
- * are for the Today list.
+ * One side effect: glyph (✓ done, `warn` for irreversible, an undo arrow once undone, the march while its undo runs),
+ * the past-tense label, a caption (where it came from, on Today; "irreversible"; "via or1 · Gmail" for an undo the
+ * agent does, "Undoing in Gmail…" while it does), the evidence frame's thumbnail if it has one, and the undo state: an
+ * Undo chip while it can be undone, "Undone" with the label struck through, the reason when the undo failed, nothing
+ * once it has expired. [time] and [source] are for the Today list; [dim] is the idle home's look (text3, chips live).
  */
 @Composable
-fun ReceiptRow(effect: Effect, onUndo: (Effect) -> Unit, modifier: Modifier = Modifier, time: String? = null, source: String? = null) {
+fun ReceiptRow(
+    effect: Effect, onUndo: (Effect) -> Unit, modifier: Modifier = Modifier, time: String? = null, source: String? = null,
+    dim: Boolean = false,
+) {
     // An offer runs out on its own (the timer ended, the alarm rang): wake once at that moment, no ticking.
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val state = effect.stateAt(now)
@@ -326,30 +335,39 @@ fun ReceiptRow(effect: Effect, onUndo: (Effect) -> Unit, modifier: Modifier = Mo
         }
     }
     val irreversible = effect.tier == UndoTier.NONE
+    val byAgent = effect.tier == UndoTier.AGENT
+    val undone = state == UndoState.UNDONE
+    val note = when {
+        irreversible -> "irreversible"
+        byAgent && state == UndoState.AVAILABLE -> "via or1" + (effect.app?.let { " · $it" } ?: "")
+        byAgent && state == UndoState.PENDING -> "Undoing in ${effect.app ?: "the app"}…"
+        else -> null
+    }
+    val caption = listOfNotNull(source, note).joinToString(" · ").ifEmpty { null }
     Row(modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
         if (time != null) {
-            Text(time, style = Type.Caption.copy(fontFeatureSettings = "tnum"), modifier = Modifier.width(44.dp))
+            Text(time, style = Type.Step.copy(fontFeatureSettings = "tnum"), maxLines = 1, modifier = Modifier.width(48.dp))
         }
         Box(Modifier.width(26.dp), contentAlignment = Alignment.CenterStart) {
             when {
                 state == UndoState.PENDING -> March()
                 state == UndoState.FAILED -> Icon(Icons.Close, null, tint = Palette.Error, modifier = Modifier.size(16.dp))
                 irreversible -> Icon(Icons.Warn, "Irreversible", tint = Palette.Warn, modifier = Modifier.size(16.dp))
-                else -> Icon(Icons.Check, null, tint = if (state == UndoState.UNDONE) Palette.Text3 else Palette.Text2, modifier = Modifier.size(16.dp))
+                undone -> Icon(Icons.Undo, "Undone", tint = Palette.Text3, modifier = Modifier.size(16.dp))
+                else -> Icon(Icons.Check, null, tint = if (dim) Palette.Text3 else Palette.Text2, modifier = Modifier.size(16.dp))
             }
         }
         Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
-            val undone = state == UndoState.UNDONE
             Text(
                 effect.label,
                 style = Type.Label.copy(
-                    color = if (undone) Palette.Text3 else Palette.Text,
+                    color = if (undone || dim) Palette.Text3 else Palette.Text,
                     textDecoration = if (undone) TextDecoration.LineThrough else null,
                 ),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            source?.let { Text(it, style = Type.Caption, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            caption?.let { Text(it, style = Type.Caption, maxLines = 1, overflow = TextOverflow.Ellipsis) }
             if (state == UndoState.FAILED) {
                 Text(
                     "Couldn't undo" + (effect.detail?.let { ": $it" } ?: "."),
@@ -357,9 +375,11 @@ fun ReceiptRow(effect: Effect, onUndo: (Effect) -> Unit, modifier: Modifier = Mo
                 )
             }
         }
+        if (effect.evidence != null) EvidenceThumb(effect)
         when (state) {
-            UndoState.AVAILABLE -> UndoChip(if (effect.tier == UndoTier.AGENT) "Ask or1 to undo" else "Undo") { onUndo(effect) }
-            UndoState.PENDING -> StateNote("Undoing")
+            UndoState.AVAILABLE -> UndoChip("Undo") { onUndo(effect) }
+            // The caption says where the agent is undoing it.
+            UndoState.PENDING -> if (byAgent) Spacer(Modifier.width(10.dp)) else StateNote("Undoing")
             UndoState.UNDONE -> StateNote("Undone")
             else -> Spacer(Modifier.width(10.dp))
         }

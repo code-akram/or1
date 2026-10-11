@@ -47,10 +47,10 @@ import kotlinx.coroutines.delay
  * below it, clear of the camera notch, taking [RAIL_HEIGHT] from the screens under it. Pixel blocks, in the boot
  * wordmark's style (brand/make_boot.py has the same glyphs): or1 on the left (blocks march while the agent works);
  * time, battery level and Wi-Fi bars on the right. or1 is the home button ([onHome]); the rail is as tall as its
- * 48 dp target.
+ * 48 dp target. [unseen]: one `live` block after the wordmark (when not marching) for a routine act not yet seen.
  */
 @Composable
-fun StatusRail(busy: Boolean, onHome: () -> Unit, modifier: Modifier = Modifier) {
+fun StatusRail(busy: Boolean, onHome: () -> Unit, modifier: Modifier = Modifier, unseen: Boolean = false) {
     val context = LocalContext.current
     val state by produceState(read(context)) {
         while (true) {
@@ -74,7 +74,11 @@ fun StatusRail(busy: Boolean, onHome: () -> Unit, modifier: Modifier = Modifier)
             Wordmark()
             // Bottom-aligned with the wordmark, in a slot that's there whether or not it marches.
             Box(Modifier.size(BLOCK * 5, BLOCK * PixelFont.HEIGHT), contentAlignment = Alignment.BottomStart) {
-                if (busy) March(block = BLOCK)
+                when {
+                    busy -> March(block = BLOCK)
+                    // One `live` block: a routine left a result in the stream that hasn't been seen.
+                    unseen -> Canvas(Modifier.size(BLOCK)) { drawRect(Palette.Live) }
+                }
             }
         }
         Spacer(Modifier.weight(1f))

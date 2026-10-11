@@ -73,6 +73,8 @@ object Fonts {
 
 /** Four voices: serif for the agent's words, sans for the phone's facts, mono for raw tool calls, pixels for system state. */
 object Type {
+    /** Page titles (Today, Routines, What or1 knows). */
+    val Title = TextStyle(fontFamily = Fonts.Sans, fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.Medium, color = Palette.Text)
     val Reply = TextStyle(fontFamily = Fonts.Serif, fontSize = 17.sp, lineHeight = 26.sp, color = Palette.Text)
     /** Voice mode's spoken reply. */
     val Spoken = TextStyle(fontFamily = Fonts.Serif, fontSize = 24.sp, lineHeight = 32.sp, color = Palette.Text)
@@ -116,7 +118,7 @@ object Motion {
 
 /** Corner shapes. */
 object Shapes {
-    /** Stream cards: live result cards (receipts and work cards to follow). */
+    /** Every stream and page card: act cards, receipts, result cards, Today's days, routines, memory notes. */
     val card = RoundedCornerShape(16.dp)
     /** Now chips. */
     val chip = RoundedCornerShape(18.dp)
@@ -168,6 +170,8 @@ object Icons {
     )
     val ExpandMore = icon("M16.59,8.59L12,13.17 7.41,8.59 6,10l6,6 6,-6z")
     val ExpandLess = icon("M12,8l-6,6 1.41,1.41L12,10.83l4.59,4.58L18,14z")
+    /** An undone effect. */
+    val Undo = icon("M12.5,8c-2.65,0 -5.05,0.99 -6.9,2.6L2,7v9h9l-3.62,-3.62c1.39,-1.16 3.16,-1.88 5.12,-1.88 3.54,0 6.55,2.31 7.6,5.5l2.37,-0.78C21.08,11.03 17.15,8 12.5,8z")
     val Check = icon("M9,16.17L4.83,12l-1.42,1.41L9,19 21,7l-1.41,-1.41z")
     val Close = icon("M19,6.41L17.59,5 12,10.59 6.41,5 5,6.41 10.59,12 5,17.59 6.41,19 12,13.41 17.59,19 19,17.59 13.41,12z")
     val More = icon("M12,8c1.1,0 2,-0.9 2,-2s-0.9,-2 -2,-2 -2,0.9 -2,2 0.9,2 2,2zM12,10c-1.1,0 -2,0.9 -2,2s0.9,2 2,2 2,-0.9 2,-2 -0.9,-2 -2,-2zM12,16c-1.1,0 -2,0.9 -2,2s0.9,2 2,2 2,-0.9 2,-2 -0.9,-2 -2,-2z")

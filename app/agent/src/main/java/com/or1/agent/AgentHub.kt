@@ -37,8 +37,13 @@ import org.json.JSONObject
 sealed interface ChatItem {
     val id: Long
 
-    /** `source` is set when the agent started the request itself (a routine), e.g. "Every day at 08:00". */
-    data class User(override val id: Long, val text: String, val source: String? = null) : ChatItem
+    /**
+     * `source` is set when the agent started the request itself (a routine), e.g. "Every day at 08:00". [at] (epoch ms)
+     * places today's routine acts among the chat's turns.
+     */
+    data class User(
+        override val id: Long, val text: String, val source: String? = null, val at: Long = System.currentTimeMillis(),
+    ) : ChatItem
     data class Reply(override val id: Long, val text: String, val cost: Double, val seconds: Double) : ChatItem
     data class Thinking(override val id: Long, val text: String) : ChatItem
     /** `label` is plain language ("Set media volume to 3"); `detail` is the raw call. */
@@ -52,9 +57,6 @@ sealed interface ChatItem {
      */
     data class Effect(override val id: Long, val effect: com.or1.agent.Effect) : ChatItem
 }
-
-/** Shown at the top of the chat: with the system UI locked down (see [Lockdown]), this is how routines reach the user. */
-data class Alert(val id: Long, val text: String)
 
 /** Process-wide owner of the agent: runs one request at a time and publishes chat items for the UI. */
 object AgentHub {
@@ -87,8 +89,6 @@ object AgentHub {
     private val _runningRoutine = MutableStateFlow<String?>(null)
     /** The label ("Name · trigger") of the routine run in progress, from its start (network wait included) to its end. */
     val runningRoutine: StateFlow<String?> = _runningRoutine
-    private val _alerts = MutableStateFlow<List<Alert>>(emptyList())
-    val alerts: StateFlow<List<Alert>> = _alerts
     private val _showRoutines = MutableStateFlow(false)
     /** Set when a routine notification is tapped; the chat opens the Routines screen and calls [routinesShown]. */
     val showRoutines: StateFlow<Boolean> = _showRoutines
@@ -338,7 +338,9 @@ object AgentHub {
                     )
                     scope.launch(Dispatchers.IO) { reloadRoutineActs() }
                     Notifier.reply(label, outcome.reply)
-                    alert(Alert(ids.incrementAndGet(), "$label: ${outcome.reply}"))
+                    // The run's act shows in the chat stream (routineActs); with the system UI locked down, the chime is
+                    // how it gets the user's attention.
+                    Notifier.chime()
                 } finally {
                     lastRequestEnd = System.currentTimeMillis()
                     this@AgentHub.routine = null
@@ -472,16 +474,6 @@ object AgentHub {
     /** Debug: pretend the chat has been idle [ms] longer (to test the auto new chat without waiting an hour). */
     fun backdateChat(ms: Long) {
         if (lastChatEnd > 0) lastChatEnd -= ms
-    }
-
-    fun dismissAlert(id: Long) = _alerts.update { list -> list.filterNot { it.id == id } }
-
-    fun clearAlerts() = _alerts.update { emptyList() }
-
-    /** Adds an alert with a chime; keeps the three newest. */
-    private fun alert(alert: Alert) {
-        _alerts.update { list -> (list + alert).takeLast(3) }
-        Notifier.chime()
     }
 
     fun showRoutines() {
