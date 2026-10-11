@@ -52,6 +52,11 @@ class AgentService : Service() {
  * included, one per line (`id tier state source label | call | detail`) to files/effects.txt and logcat tag or1-activity;
  * `--es undo ID|last` undoes one (`last`: the newest that can be), then writes the list again once it settles.
  *
+ * Evidence ([Evidence]): `--es evidence list` writes the effects that have an evidence frame (`id tier label | path |
+ * size`) to files/evidence.txt; `--es taps N` writes the last N (default 20) tap marks on the work display to
+ * files/taps.txt (tag or1-evidence). `--es acts list` writes today's routine acts ([AgentHub.routineActs]) to
+ * files/routine-acts.txt.
+ *
  * Voice ([Voice.kt]): `--es voice speak:<text>` speaks it and `--es voice listen` records one utterance; the result (final text,
  * peak level, sentences, word boundaries, recogniser and network) goes to files/voice.txt and logcat tag or1-voice;
  * `--es voice stop` stops both. `--es now dump` writes the Now state ([NowState]) to files/now.txt (tag or1-now).
@@ -71,6 +76,9 @@ class DebugReceiver : BroadcastReceiver() {
         intent.getLongExtra("backdate_chat_ms", 0).takeIf { it > 0 }?.let { AgentHub.backdateChat(it); return }
         intent.getStringExtra("dismiss")?.let { NotifListener.dismiss(it.split(',').toSet()); return }
         intent.getStringExtra("effects")?.let { writeEffects(context, today = it == "today"); return }
+        intent.getStringExtra("evidence")?.let { writeEvidence(context); return }
+        intent.getStringExtra("taps")?.let { writeTaps(context, it.toIntOrNull() ?: 20); return }
+        intent.getStringExtra("acts")?.let { writeRoutineActs(context); return }
         intent.getStringExtra("undo")?.let { id ->
             val target = if (id == "last") ActivityLog.effects.value.firstOrNull { it.canUndo() }?.id else id
             val started = target != null && AgentHub.undo(target)
@@ -116,6 +124,36 @@ private fun writeEffects(context: Context, today: Boolean) {
     }.ifEmpty { "no effects" }
     android.util.Log.i("or1-activity", text)
     java.io.File(context.filesDir, "effects.txt").writeText(text + "\n")
+}
+
+/** Effects with an evidence frame, newest first: `id tierN label | path | size or missing`. */
+private fun writeEvidence(context: Context) {
+    val text = ActivityLog.effects.value.filter { it.evidence != null }.joinToString("\n") { e ->
+        val file = java.io.File(e.evidence!!)
+        "${e.id} tier${e.tier.level} ${e.label} | ${e.evidence} | ${if (file.exists()) "${file.length()} bytes" else "missing"}"
+    }.ifEmpty { "no evidence" }
+    android.util.Log.i("or1-evidence", text)
+    java.io.File(context.filesDir, "evidence.txt").writeText(text + "\n")
+}
+
+/** The last [n] tap marks on the work display, oldest first: `kind x,y on WxH, N ms ago`. */
+private fun writeTaps(context: Context, n: Int) {
+    val now = android.os.SystemClock.elapsedRealtime()
+    val text = Evidence.recentTaps(n).joinToString("\n") { t ->
+        "${t.kind} ${t.x.toInt()},${t.y.toInt()} on ${t.displayW}x${t.displayH}, ${now - t.atElapsed} ms ago"
+    }.ifEmpty { "no taps" }
+    android.util.Log.i("or1-evidence", text)
+    java.io.File(context.filesDir, "taps.txt").writeText(text + "\n")
+}
+
+/** Today's routine acts ([AgentHub.routineActs]), oldest first. */
+private fun writeRoutineActs(context: Context) {
+    val text = AgentHub.routineActs.value.joinToString("\n") { a ->
+        "${a.id} ${a.label} | ${java.util.Date(a.finished)} | failed=${a.failed} stopped=${a.stopped} steps=${a.steps} " +
+            "effects=${a.effects.joinToString(",") { it.id }} | ${a.request.take(60)} -> ${a.reply.take(80).replace('\n', ' ')}"
+    }.ifEmpty { "no routine acts" }
+    android.util.Log.i("or1-routines", text)
+    java.io.File(context.filesDir, "routine-acts.txt").writeText(text + "\n")
 }
 
 private fun writeNow(context: Context) {

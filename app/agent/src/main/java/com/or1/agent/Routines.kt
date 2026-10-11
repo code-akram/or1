@@ -345,3 +345,86 @@ internal fun nextRun(r: Routine, after: ZonedDateTime): ZonedDateTime {
     ) candidate = candidate.plusDays(1)
     return candidate
 }
+
+/**
+ * A finished routine run, for the chat stream (docs/ui-ledger.md §2, "Routine result"): an act tagged
+ * `routine · <trigger>`. Built from the routine transcripts (files/routine-transcripts/), so runs survive a restart.
+ */
+data class RoutineAct(
+    /** Stable across restarts: "<transcript file name without .jsonl>#<run number in that file>". */
+    val id: String,
+    val routineId: String,
+    /** What the chat shows for the run: "Name · trigger", or just the trigger. */
+    val label: String,
+    /** The trigger as described when it ran ("Every day at 08:00", "… (late: …)"). */
+    val trigger: String,
+    /** When the run started and finished (epoch ms). */
+    val started: Long,
+    val finished: Long,
+    /** The routine's request and the agent's reply. */
+    val request: String,
+    val reply: String,
+    /** The run errored (API or network) even after its retry. */
+    val failed: Boolean,
+    /** The user stopped it. */
+    val stopped: Boolean,
+    /** Tool calls made (reads included), for "N steps". */
+    val steps: Int,
+    val cost: Double,
+    val seconds: Double,
+    /** Absolute path of the routine transcript holding the run. */
+    val transcript: String,
+    /** Its side effects, oldest first, kept current with their undo state (see [withEffects]). */
+    val effects: List<Effect> = emptyList(),
+    /** Ids of its effects as logged; null for runs logged before they were (matched by routine and time instead). */
+    val effectIds: List<String>? = null,
+) {
+    /** This run with [effects] picked from [all] (any order): by id, else the routine's effects during the run. */
+    fun withEffects(all: List<Effect>): RoutineAct {
+        val mine = if (effectIds != null) {
+            val wanted = effectIds.toSet()
+            all.filter { it.id in wanted }
+        } else {
+            all.filter { it.source == "routine" && it.sourceId == routineId && it.time in started..finished }
+        }
+        return copy(effects = mine.sortedBy { it.time })
+    }
+}
+
+/**
+ * The finished runs in one routine transcript ([transcript] is its path), in order. A run is a `routine_run` record
+ * up to its `routine_reply`; tool records in between count as steps. A run without a reply (the process died) is left
+ * out. Lines that aren't JSON are skipped. Times are the records' `t` (epoch seconds).
+ */
+fun parseRoutineActs(lines: Sequence<String>, transcript: String): List<RoutineAct> {
+    val name = File(transcript).name.removeSuffix(".jsonl")
+    val acts = mutableListOf<RoutineAct>()
+    var number = 0
+    var run: JSONObject? = null
+    var started = 0L
+    var steps = 0
+    for (line in lines) {
+        val record = runCatching { JSONObject(line) }.getOrNull() ?: continue
+        val t = (record.optDouble("t", 0.0) * 1000).toLong()
+        record.optJSONObject("routine_run")?.let {
+            number++
+            run = it
+            started = t
+            steps = 0
+        }
+        if (record.has("tool") && run != null) steps++
+        val reply = record.optJSONObject("routine_reply") ?: continue
+        val r = run ?: continue
+        run = null
+        val trigger = r.optString("trigger")
+        acts += RoutineAct(
+            id = "$name#$number", routineId = r.optString("id"),
+            label = r.optString("label").ifBlank { trigger }, trigger = trigger,
+            started = started, finished = t, request = r.optString("prompt"), reply = reply.optString("text"),
+            failed = reply.optBoolean("failed"), stopped = reply.optBoolean("stopped"), steps = steps,
+            cost = reply.optDouble("cost", 0.0), seconds = reply.optDouble("seconds", 0.0), transcript = transcript,
+            effectIds = reply.optJSONArray("effects")?.let { a -> (0 until a.length()).map { a.getString(it) } },
+        )
+    }
+    return acts
+}

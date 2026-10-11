@@ -57,6 +57,11 @@ data class Effect(
     val expiresAt: Long = 0,
     /** The app the change happened in (tier 2 and 3 taps), as a label. */
     val app: String? = null,
+    /**
+     * Absolute path of the frame of the work display taken just before the committing tap (tier 2 and 3 `act` taps;
+     * files/evidence/<id>.webp, see [Evidence]). The file may be gone (pruned after 30 days).
+     */
+    val evidence: String? = null,
 ) {
     /** [state], with an offer past [expiresAt] read as expired. */
     fun stateAt(now: Long = System.currentTimeMillis()): UndoState =
@@ -68,7 +73,7 @@ data class Effect(
         .put("id", id).put("t", time).put("source", source).put("source_id", sourceId).put("source_label", sourceLabel)
         .put("tool", tool).put("call", call).put("label", label).put("tier", tier.level)
         .put("undo", undo?.let { JSONObject(it) }).put("state", state.name.lowercase()).put("detail", detail)
-        .put("expires", expiresAt).put("app", app)
+        .put("expires", expiresAt).put("app", app).put("evidence", evidence)
 
     companion object {
         fun fromJson(o: JSONObject) = Effect(
@@ -77,7 +82,7 @@ data class Effect(
             call = o.optString("call"), label = o.getString("label"),
             tier = UndoTier.entries.firstOrNull { it.level == o.optInt("tier") } ?: UndoTier.NONE,
             undo = o.optJSONObject("undo")?.toString(), state = parseState(o.optString("state")), detail = o.str("detail"),
-            expiresAt = o.optLong("expires"), app = o.str("app"),
+            expiresAt = o.optLong("expires"), app = o.str("app"), evidence = o.str("evidence"),
         )
     }
 }
