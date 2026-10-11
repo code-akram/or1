@@ -19,7 +19,7 @@
     <uses-permission android:name="android.permission.SET_WALLPAPER" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.READ_CALENDAR" />
-    <!-- Voice (not wired up yet) and the speaker/mic check in AudioCheck. -->
+    <!-- Voice (Voice.kt: the level meter; the recogniser records in its own process) and the speaker/mic check in AudioCheck. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
@@ -51,6 +51,16 @@
     <uses-permission android:name="android.permission.CHANGE_COMPONENT_ENABLED_STATE" tools:ignore="ProtectedPermissions" />
     <!-- Mute apps while they run on the hidden display (tools/HiddenAudio.kt). -->
     <uses-permission android:name="android.permission.MANAGE_APP_OPS_MODES" tools:ignore="ProtectedPermissions" />
+
+    <!-- Package visibility for Voice.kt (QUERY_ALL_PACKAGES covers it too, but keep the intents explicit). -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
 
     <application
         android:label="or1"

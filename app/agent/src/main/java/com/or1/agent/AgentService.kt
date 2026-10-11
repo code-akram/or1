@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.IBinder
 import com.or1.agent.tools.HiddenDisplay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /** Keeps the agent's process alive while a request runs in the background (another app in front). */
@@ -51,6 +52,10 @@ class AgentService : Service() {
  * included, one per line (`id tier state source label | call | detail`) to files/effects.txt and logcat tag or1-activity;
  * `--es undo ID|last` undoes one (`last`: the newest that can be), then writes the list again once it settles.
  *
+ * Voice ([Voice.kt]): `--es voice speak:<text>` speaks it and `--es voice listen` records one utterance; the result (final text,
+ * peak level, sentences, word boundaries, recogniser and network) goes to files/voice.txt and logcat tag or1-voice;
+ * `--es voice stop` stops both. `--es now dump` writes the Now state ([NowState]) to files/now.txt (tag or1-now).
+ *
  * Hidden display checks: `--es display info|create|launch|tap|back|home|park|restore|focus|snap|front|move|tool [--es name N --es args JSON] [--es pkg P] [--ei x X --ei y Y]
  * [--ei task T]`; results go to logcat (tag or1-display) and files/display.txt.
  */
@@ -58,6 +63,8 @@ class DebugReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         AgentHub.init(context.applicationContext)
         intent.getStringExtra("display")?.let { displayCommand(context, it, intent); return }
+        intent.getStringExtra("voice")?.let { voiceCommand(context.applicationContext, it); return }
+        intent.getStringExtra("now")?.let { writeNow(context); return }
         intent.getStringExtra("routine")?.let { Routines.fire(it); return }
         if (intent.getBooleanExtra("stop", false)) { AgentHub.stop(); return }
         intent.getStringExtra("lockdown")?.let { Lockdown.setEnabled(it != "off"); return }
@@ -109,6 +116,101 @@ private fun writeEffects(context: Context, today: Boolean) {
     }.ifEmpty { "no effects" }
     android.util.Log.i("or1-activity", text)
     java.io.File(context.filesDir, "effects.txt").writeText(text + "\n")
+}
+
+private fun writeNow(context: Context) {
+    val now = System.currentTimeMillis()
+    val elapsed = android.os.SystemClock.elapsedRealtime()
+    val text = buildString {
+        appendLine("chips: " + NowState.chips.value.joinToString(", ") { it.key }.ifEmpty { "none" })
+        NowState.timers.value.forEach { t ->
+            appendLine("timer ${t.id} ${t.state.name.lowercase()} label=${t.label} left=${t.endsAtElapsed?.let { (it - elapsed) / 1000 }}s paused_left=${t.remainingMs?.div(1000)}s or1=${t.fromOr1}")
+        }
+        NowState.alarm.value?.let { appendLine("alarm ${java.util.Date(it.at)} label=${it.label} effect=${it.effectId}") } ?: appendLine("alarm none")
+        NowState.event.value?.let { appendLine("event ${it.eventId} “${it.title}” in ${(it.begin - now) / 60_000} min, ends ${java.util.Date(it.end)}") } ?: appendLine("event none")
+        appendLine("routine ${NowState.routine.value}")
+        NowState.notifications.value.forEach { g ->
+            appendLine("notifications ${g.app} (${g.pkg}): ${g.items.size}")
+            g.items.forEach { appendLine("  ${it.key} | ${it.title} | ${it.text.take(60)} | icon=${it.iconPackage}:${it.iconRes}") }
+        }
+    }.trimEnd()
+    android.util.Log.i("or1-now", text)
+    java.io.File(context.filesDir, "now.txt").writeText(text + "\n")
+}
+
+/** `speak:<text>`, `listen` or `stop`; see [DebugReceiver]. */
+private fun voiceCommand(context: Context, command: String) {
+    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
+        val result = try {
+            when {
+                command.startsWith("speak:") -> debugSpeak(context, command.removePrefix("speak:"))
+                command == "listen" -> debugListen(context)
+                command == "stop" -> {
+                    VoiceEngines.output(context).stop()
+                    VoiceEngines.input(context).cancel()
+                    "stopped"
+                }
+                else -> "unknown voice command '$command' (speak:<text>, listen, stop)"
+            }
+        } catch (e: Exception) {
+            "error: $e"
+        }
+        android.util.Log.i("or1-voice", result)
+        java.io.File(context.filesDir, "voice.txt").writeText(result + "\n")
+    }
+}
+
+private suspend fun debugSpeak(context: Context, text: String): String = kotlinx.coroutines.coroutineScope {
+    val out = VoiceEngines.output(context)
+    val started = System.currentTimeMillis()
+    val ready = kotlinx.coroutines.withTimeoutOrNull(10_000) { out.available.first { it } } != null
+    var peak = 0f
+    val spoken = sortedSetOf<Int>()
+    val level = launch { out.level.collect { peak = maxOf(peak, it) } }
+    val progress = launch {
+        out.progress.collect { p ->
+            if (p.id == "debug" && p.index >= 0 && spoken.add(p.index)) android.util.Log.i("or1-voice", "sentence ${p.index}: ${p.sentences[p.index]}")
+        }
+    }
+    out.speak(text, "debug")
+    val finished = kotlinx.coroutines.withTimeoutOrNull(120_000) { out.progress.first { it.id == "debug" && !it.speaking } } != null
+    level.cancel()
+    progress.cancel()
+    val p = out.progress.value
+    "speak: ready=$ready finished=$finished engine=${(out as? AndroidSpeechOutput)?.engine ?: "default"} " +
+        "sentences=${p.sentences.size} spoken=$spoken words=${(out as? AndroidSpeechOutput)?.words} peak=${"%.2f".format(peak)} " +
+        "took=${"%.1f".format((System.currentTimeMillis() - started) / 1000.0)}s\n" + p.sentences.withIndex().joinToString("\n") { "${it.index}: ${it.value}" }
+}
+
+private suspend fun debugListen(context: Context): String = kotlinx.coroutines.coroutineScope {
+    val input = VoiceEngines.input(context)
+    val service = android.provider.Settings.Secure.getString(context.contentResolver, "voice_recognition_service")
+    val onDevice = runCatching { android.speech.SpeechRecognizer.isOnDeviceRecognitionAvailable(context) }.getOrDefault(false)
+    val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
+    val online = cm.getNetworkCapabilities(cm.activeNetwork)?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+    val started = System.currentTimeMillis()
+    var peak = 0f
+    var partials = 0
+    val level = launch { input.level.collect { peak = maxOf(peak, it) } }
+    val partial = launch { input.partial.collect { if (it.isNotBlank()) { partials++; android.util.Log.i("or1-voice", "partial: $it") } } }
+    input.start()
+    kotlinx.coroutines.withTimeoutOrNull(3_000) { input.state.first { it == ListenState.LISTENING || it == ListenState.PROCESSING } }
+    if (!input.available) {
+        // Level meter only: give it a few seconds of sound, then stop.
+        kotlinx.coroutines.delay(5_000)
+        input.stop()
+    }
+    var done = kotlinx.coroutines.withTimeoutOrNull(20_000) { input.state.first { it == ListenState.IDLE || it == ListenState.ERROR } } != null
+    if (!done) {
+        input.stop()
+        done = kotlinx.coroutines.withTimeoutOrNull(8_000) { input.state.first { it == ListenState.IDLE || it == ListenState.ERROR } } != null
+        if (!done) input.cancel()
+    }
+    level.cancel()
+    partial.cancel()
+    "listen: final=${input.result.value?.let { "\"$it\"" }} peak=${"%.2f".format(peak)} partials=$partials state=${input.state.value} " +
+        "error=${input.error.value?.let { "${it.kind}: ${it.message}" }} finished=$done took=${"%.1f".format((System.currentTimeMillis() - started) / 1000.0)}s\n" +
+        "available=${input.available} service=$service on_device=$onDevice network_validated=$online"
 }
 
 private fun displayCommand(context: Context, command: String, intent: Intent) {
