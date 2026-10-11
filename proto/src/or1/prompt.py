@@ -26,6 +26,7 @@ view when a request may depend on their preferences.
 Replies are read on a small phone screen: keep them short and write plain sentences. No markdown: no asterisks or bold, no bullet or numbered lists, no tables or headings. Say what you did and \
 the outcome, and say plainly if something failed or could not be verified.
 
-Device notes: no Google services or Play Store; the only browser is the basic "WebView Browser Tester"; calls and \
-SMS are out of scope for this device.
+Device notes: Google apps are installed (Gmail, YouTube, Play Store; the device is uncertified, so apps that use \
+Play Integrity may refuse to run); the only browser is the basic "WebView Browser Tester"; calls and SMS are out of \
+scope for this device.
 """

@@ -138,6 +138,12 @@ in `export_agent_json.py`). Stored in `files/routines.json`.
   follow; runs from earlier processes come back as request and reply (`routine_run`/`routine_reply` records in the
   routine transcripts). "Continue in chat" copies a run into the chat and into the chat agent's context
   (`Agent.addContext`), so the user can follow up there.
+- Routine acts: `AgentHub.routineActs` lists today's finished runs (newest last) for the chat stream as `RoutineAct`s:
+  id (`<transcript>#<n>`, stable across restarts), label, trigger, start/finish, request, reply, failed/stopped, steps,
+  its effects (kept current with their undo state) and the transcript path. Read from the routine transcripts:
+  `routine_run` now logs `label`, `routine_reply` logs `failed`, `stopped` and the run's effect ids (older runs match
+  effects by routine id and time). `dismissRoutineAct(id)` hides one (files/routine-acts-dismissed.txt). Debug:
+  `--es acts list` writes files/routine-acts.txt.
 - Runs act without asking, like the chat. With the system UI locked down, finished runs leave result banners at
   the top of the chat (with a chime; the three newest; dismissable). A run is labelled "Name · trigger" (or just
   the trigger) in the chat, the banner and the notification. The old "routine-approvals" notification channel is
@@ -173,6 +179,24 @@ and app are read before it runs.
   `deleteNote`, `restoreNote` (`MemoryNotes` in `tools/MemoryTool.kt`, shared with the tool and undo).
 - Debug: `--es effects list|today` writes `files/effects.txt` (and logcat tag `or1-activity`), one line per effect:
   `id tierN state source:id label | call | detail`; `--es undo ID|last` undoes one, then writes the list once it settles.
+
+## Evidence (`Evidence.kt`)
+What the Act card shows of the agent's work on the work display (docs/ui-ledger.md §4).
+- Tap marks: every stroke injected on the work display (`HiddenDisplay.injectStroke`: `act` tap, long press, scroll;
+  the debug `display tap`) publishes a `TapMark(x, y, displayW, displayH, atElapsed, kind)` in work-display pixels
+  (element taps at the element's bounds centre; swipes where they start) on `Evidence.lastTap` (StateFlow) and
+  `Evidence.taps` (SharedFlow). The UI draws a ring for `Evidence.RING_MS` (600 ms) after `atElapsed`
+  (`SystemClock.elapsedRealtime`). Not marked: `input tap` from `shell`, the user's own touches in the viewer.
+- Evidence frames: before an `act` tap that classifies as tier 2 or 3 (the same `Effects.classify` call the effect
+  gets), `HiddenDisplay.latestFrame()` converts the display's newest image (waiting at most 40 ms, else the last
+  preview), scaled to 240 px wide RGB565 and saved in the background as files/evidence/<effectId>.webp. The effect's
+  `evidence` field (activity.jsonl; absent in older records) has its absolute path. At most 8 per act (request); none
+  when the app runs on the real screen. A frame whose tap failed is deleted; frames older than 30 days, and ones no
+  effect links to after an hour, are pruned on start and every 6 hours.
+- Takeover: `AgentHub.usingWorkDisplay` (a request is running and has the work display awake, from `HiddenDisplay.inUse`)
+  and `AgentHub.workApp` (`HiddenDisplay.foregroundApp`, the label of the app in front there) for "Watch or take over".
+- Debug: `--es evidence list` writes files/evidence.txt (`id tierN label | path | size`); `--es taps N` writes the last
+  N (default 20) marks to files/taps.txt (`kind x,y on WxH, N ms ago`); logcat tag `or1-evidence`.
 
 ## Now state (`NowState.kt`)
 One source for the Now strip and the live cards (docs/ui-ledger.md §2, §5), started by `AgentHub.init`. StateFlows that

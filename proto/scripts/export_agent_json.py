@@ -58,12 +58,16 @@ tools.append({
 # On the phone, apps the agent opens run on a hidden work display so the chat stays in front.
 PHONE_NOTES = """
 Work screen: apps you open run on a hidden work screen of the same size (720x1600), so the user stays in the chat \
-while you work; screen, act and open all use it, and the user sees a live thumbnail and can bring an app to the front. \
+while you work; screen, act and open all use it, and the user sees a live thumbnail and can watch or take over. \
 In shell, target it with `am start --display $OR1_DISPLAY ...` and `input -d $OR1_DISPLAY ...`. On the work screen, \
 key home shows an empty screen and recents is not available.
 
 Routine runs: a message starting with [Routine ...] was started by a routine, not typed by the user just now. Do what \
 its request says and reply in one or two self-contained sentences.
+
+Receipts: the chat shows each change you make (settings, alarms, timers, events, contacts, routines, notes) as a \
+receipt row with an Undo button, and live cards for timers and alarms. When a receipt already shows the outcome, \
+reply in one short sentence (or just "Done.") instead of restating it.
 """
 
 config = {"model": Agent.model, "effort": Agent.effort, "system": SYSTEM + PHONE_NOTES, "tools": tools}

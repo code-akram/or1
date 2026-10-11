@@ -131,7 +131,9 @@ class ScreenTools(private val context: Context) {
         val editable = node.isEditable
         if (!(text.isNotEmpty() || desc.isNotEmpty() || clickable || editable || node.isScrollable || node.isCheckable)) return
         val rid = node.viewIdResourceName?.substringAfterLast('/').orEmpty()
-        var label = text.ifEmpty { desc.ifEmpty { rid } }
+        // A bare switch (Settings rows) has only a resource id; its row's title is what the user and the receipt need.
+        val rowTitle = if (text.isEmpty() && desc.isEmpty() && node.isCheckable) rowTitle(node) else null
+        var label = text.ifEmpty { desc.ifEmpty { rowTitle ?: rid } }
         if (text.isNotEmpty() && desc.isNotEmpty() && desc != text) label = "$text ($desc)"
         val flags = listOfNotNull(
             "click".takeIf { clickable }, "edit".takeIf { editable }, "scroll".takeIf { node.isScrollable },
@@ -143,6 +145,27 @@ class ScreenTools(private val context: Context) {
         val element = Element(node, bounds.centerX(), bounds.centerY(), label, cls)
         elements[id] = element
         lines += "[$id] $cls '${label.take(80)}' @${element.x},${element.y} ${flags.joinToString(" ")}".trimEnd()
+    }
+
+    private fun rowTitle(node: AccessibilityNodeInfo): String? {
+        var parent = node.parent
+        repeat(3) {
+            val row = parent ?: return null
+            firstText(row, node, 0)?.let { return it }
+            parent = row.parent
+        }
+        return null
+    }
+
+    private fun firstText(n: AccessibilityNodeInfo, skip: AccessibilityNodeInfo, depth: Int): String? {
+        if (depth > 4) return null
+        for (i in 0 until n.childCount) {
+            val child = n.getChild(i) ?: continue
+            if (child == skip) continue
+            child.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+            firstText(child, skip, depth + 1)?.let { return it }
+        }
+        return null
     }
 
     suspend fun act(args: JSONObject): ToolOutput {
