@@ -33,8 +33,11 @@ Never run `adb` or `fastboot` without `-s`: the OnePlus (`d41317c3`) is on the s
 
 ```sh
 mkdir -p ~/ravoz-gms && cd ~/ravoz-gms
-scp archlinux:code/or1/downloads/gms-image/system_a-gms.img .
-scp archlinux:code/or1/downloads/gms-image/system_a-current.img .
+# One ssh stream to the Mac runs at ~1 MB/s (130 ms RTT, some loss), so the image is zstd-compressed and split
+# into 8 parts on archlinux (downloads/gms-image/parts/) and pulled in parallel: ~2-3 min instead of ~26.
+for i in 0 1 2 3 4 5 6 7; do scp -q archlinux:code/or1/downloads/gms-image/parts/gms.part.0$i . & done; wait
+cat gms.part.0* | zstd -d -o system_a-gms.img && rm gms.part.0*
+# Rollback image only if needed, the same way (split it first on archlinux).
 shasum -a 256 system_a-gms.img       # 4d96aa1f13054f02547415f0ff668f47155ab8377fa0f1f24ebafeb01aa189cb
 shasum -a 256 system_a-current.img   # f14f117749b2d6c69f6486da2321b6316505eaf0ed956af76b918ce3bb06b4d6
 
