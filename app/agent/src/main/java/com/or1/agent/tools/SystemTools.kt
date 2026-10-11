@@ -23,6 +23,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** Device state, alarms, apps, notifications and app launching, through platform APIs (no UI driving). */
@@ -63,48 +64,75 @@ class SystemTools(private val context: Context) {
         ).joinToString("\n")
     }
 
+    /** A setting's current value in the tool's terms (on|off or a number); `dnd_filter` is the exact filter, for undo. */
     @SuppressLint("MissingPermission")
-    fun deviceSet(args: JSONObject): String {
-        val setting = args.optString("setting").ifBlank { throw IllegalArgumentException("set needs `setting` and `value`.") }
-        val value = args.optString("value").trim().lowercase()
-        fun onOff(): Boolean = when (value) {
-            "on", "true", "1" -> true
-            "off", "false", "0" -> false
-            else -> throw IllegalArgumentException("$setting takes on|off.")
+    fun currentSetting(setting: String): String {
+        fun onOff(b: Boolean) = if (b) "on" else "off"
+        return when (setting) {
+            "wifi" -> onOff(wifi.isWifiEnabled)
+            "bluetooth" -> onOff(context.getSystemService(BluetoothManager::class.java).adapter?.isEnabled == true)
+            "dnd" -> onOff(notificationManager.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL)
+            "dnd_filter" -> notificationManager.currentInterruptionFilter.toString()
+            "airplane" -> onOff(Settings.Global.getInt(resolver, Settings.Global.AIRPLANE_MODE_ON, 0) == 1)
+            "auto_brightness" -> onOff(Settings.System.getInt(resolver, Settings.System.SCREEN_BRIGHTNESS_MODE, 0) == 1)
+            "dark_mode" -> onOff(uiMode.nightMode == UiModeManager.MODE_NIGHT_YES)
+            "volume" -> audio.getStreamVolume(AudioManager.STREAM_MUSIC).toString()
+            "brightness" -> Settings.System.getInt(resolver, Settings.System.SCREEN_BRIGHTNESS, -1).toString()
+            "screen_timeout" -> (Settings.System.getInt(resolver, Settings.System.SCREEN_OFF_TIMEOUT, 0) / 1000).toString()
+            else -> throw IllegalArgumentException("Unknown setting '$setting'.")
         }
-        fun number(): Int = value.toIntOrNull() ?: throw IllegalArgumentException("$setting takes a number.")
+    }
+
+    /** Changes a setting; the result's undo puts back what it was (null if it already had that value). */
+    fun deviceSet(args: JSONObject): ToolOutput {
+        val setting = args.optString("setting").ifBlank { throw IllegalArgumentException("set needs `setting` and `value`.") }
+        val value = normalizeSetting(setting, args.optString("value"), audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC))
+        val undo = deviceUndo(setting, value, ::currentSetting)
+        applySetting(setting, value)
+        return ToolOutput(if (undo == null) "$setting is already $value." else "$setting set to $value (was ${undo.optString("was")}).", undo = undo)
+    }
+
+    /** Puts settings back from a [deviceUndo] `restore` list, in order. */
+    fun restoreSettings(restore: JSONArray) {
+        for (i in 0 until restore.length()) {
+            val entry = restore.getJSONObject(i)
+            applySetting(entry.getString("setting"), entry.getString("value"))
+        }
+    }
+
+    /** `value` is normalised ([normalizeSetting]); `dnd_filter` takes a NotificationManager interruption filter. */
+    @SuppressLint("MissingPermission")
+    private fun applySetting(setting: String, value: String) {
+        val on = value == "on"
         when (setting) {
-            "wifi" -> check(wifi.setWifiEnabled(onOff())) { "Wi-Fi change was refused." }
+            "wifi" -> check(wifi.setWifiEnabled(on)) { "Wi-Fi change was refused." }
             "bluetooth" -> {
                 val adapter = context.getSystemService(BluetoothManager::class.java).adapter ?: error("No Bluetooth adapter.")
                 @Suppress("DEPRECATION")
-                check(if (onOff()) adapter.enable() else adapter.disable()) { "Bluetooth change was refused." }
+                check(if (on) adapter.enable() else adapter.disable()) { "Bluetooth change was refused." }
             }
             "dnd" -> notificationManager.setInterruptionFilter(
-                if (onOff()) NotificationManager.INTERRUPTION_FILTER_PRIORITY else NotificationManager.INTERRUPTION_FILTER_ALL
+                if (on) NotificationManager.INTERRUPTION_FILTER_PRIORITY else NotificationManager.INTERRUPTION_FILTER_ALL
             )
+            "dnd_filter" -> notificationManager.setInterruptionFilter(value.toInt())
             "airplane" -> ConnectivityManager::class.java.getMethod("setAirplaneMode", Boolean::class.javaPrimitiveType)
-                .invoke(context.getSystemService(ConnectivityManager::class.java), onOff())
-            "auto_brightness" -> Settings.System.putInt(resolver, Settings.System.SCREEN_BRIGHTNESS_MODE, if (onOff()) 1 else 0)
-            "dark_mode" -> uiMode.nightMode = if (onOff()) UiModeManager.MODE_NIGHT_YES else UiModeManager.MODE_NIGHT_NO
-            "volume" -> {
-                val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                audio.setStreamVolume(AudioManager.STREAM_MUSIC, number().coerceIn(0, max), 0)
-            }
+                .invoke(context.getSystemService(ConnectivityManager::class.java), on)
+            "auto_brightness" -> Settings.System.putInt(resolver, Settings.System.SCREEN_BRIGHTNESS_MODE, if (on) 1 else 0)
+            "dark_mode" -> uiMode.nightMode = if (on) UiModeManager.MODE_NIGHT_YES else UiModeManager.MODE_NIGHT_NO
+            "volume" -> audio.setStreamVolume(AudioManager.STREAM_MUSIC, value.toInt(), 0)
             "brightness" -> {
                 Settings.System.putInt(resolver, Settings.System.SCREEN_BRIGHTNESS_MODE, 0)
-                Settings.System.putInt(resolver, Settings.System.SCREEN_BRIGHTNESS, number().coerceIn(0, 255))
+                Settings.System.putInt(resolver, Settings.System.SCREEN_BRIGHTNESS, value.toInt())
             }
-            "screen_timeout" -> Settings.System.putInt(resolver, Settings.System.SCREEN_OFF_TIMEOUT, number() * 1000)
+            "screen_timeout" -> Settings.System.putInt(resolver, Settings.System.SCREEN_OFF_TIMEOUT, value.toInt() * 1000)
             else -> throw IllegalArgumentException("Unknown setting '$setting'.")
         }
-        return "$setting set to ${args.optString("value")}."
     }
 
-    fun clock(args: JSONObject): String {
+    fun clock(args: JSONObject): ToolOutput {
         val label = args.optString("label").takeIf { it.isNotBlank() }
         val intent = when (val action = args.getString("action")) {
-            "next_alarm" -> return nextAlarm()
+            "next_alarm" -> return ToolOutput(nextAlarm())
             "set_alarm" -> {
                 val hour = args.optInt("hour", -1)
                 val minute = args.optInt("minute", 0)
@@ -125,9 +153,72 @@ class SystemTools(private val context: Context) {
         label?.let { intent.putExtra(AlarmClock.EXTRA_MESSAGE, it) }
         // On the hidden display, so any UI the Clock app shows despite SKIP_UI stays out of sight.
         HiddenDisplay.start(intent.putExtra(AlarmClock.EXTRA_SKIP_UI, true))
-        if (args.getString("action") == "set_timer") return "Timer set for ${args.getInt("seconds")} seconds."
+        val undo = JSONObject().put("label", label)
+        if (args.getString("action") == "set_timer") {
+            val seconds = args.getInt("seconds")
+            return ToolOutput("Timer set for $seconds seconds.", undo = undo.put("op", "timer").put("seconds", seconds))
+        }
         Thread.sleep(1500)
-        return nextAlarm()
+        val alarm = if (args.getString("action") != "set_alarm") null else
+            undo.put("op", "alarm").put("hour", args.getInt("hour")).put("minute", args.optInt("minute"))
+        return ToolOutput(nextAlarm(), undo = alarm)
+    }
+
+    /**
+     * Undo of set_alarm: asks the Clock app to dismiss the alarm by its label, else by its time (it only dismisses alarms
+     * due within 24 hours, which a set_alarm one always is). Throws if the next alarm is still that one afterwards.
+     */
+    fun dismissAlarm(hour: Int, minute: Int, label: String?): String {
+        val alarms = context.getSystemService(AlarmManager::class.java)
+        val before = alarms.nextAlarmClock?.triggerTime
+        val intent = Intent(AlarmClock.ACTION_DISMISS_ALARM).putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+        if (label != null) {
+            intent.putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_LABEL).putExtra(AlarmClock.EXTRA_MESSAGE, label)
+        } else {
+            intent.putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_TIME)
+                .putExtra(AlarmClock.EXTRA_HOUR, hour).putExtra(AlarmClock.EXTRA_MINUTES, minute)
+        }
+        HiddenDisplay.start(intent)
+        Thread.sleep(1500)
+        val after = alarms.nextAlarmClock?.triggerTime
+        if (before != null && after == before) {
+            val time = java.util.Calendar.getInstance().apply { timeInMillis = after }
+            check(time.get(java.util.Calendar.HOUR_OF_DAY) != hour || time.get(java.util.Calendar.MINUTE) != minute) {
+                "The Clock app didn't turn the alarm off."
+            }
+        }
+        return "Turned off the %02d:%02d alarm.".format(hour, minute)
+    }
+
+    /**
+     * Undo of set_timer. AlarmClock has no intent to cancel a running timer (DISMISS_TIMER only silences a ringing one),
+     * so this presses the Clock app's own notification buttons through the listener: Reset, or Pause and then Reset (a
+     * running timer's notification offers Pause, a paused one Reset). Matches the label when there is one. The buttons
+     * are found by their English titles; with several timers running, "Reset all" resets them all. The Clock app hides
+     * that notification while its own screen is in front, so the caller parks the work display first when it can.
+     */
+    suspend fun cancelTimer(label: String?): String {
+        val listener = NotifListener.instance ?: error("Notification access is off, so the timer can't be reached.")
+        val clock = Intent(AlarmClock.ACTION_SET_TIMER).resolveActivity(context.packageManager)?.packageName ?: error("No Clock app.")
+        repeat(5) { attempt ->
+            val timers = listener.activeNotifications.filter { it.packageName == clock && !it.notification.actions.isNullOrEmpty() }
+            if (timers.isEmpty() && attempt < 4) {
+                delay(800)
+                return@repeat
+            }
+            val notification = timers.firstOrNull { sbn ->
+                label != null && sbn.notification.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.contains(label, ignoreCase = true) == true
+            } ?: timers.singleOrNull() ?: error(if (timers.isEmpty()) "No timer is running." else "Couldn't tell which timer it was.")
+            val actions = notification.notification.actions.associateBy { it.title.toString().lowercase() }
+            val reset = actions["reset"] ?: actions["reset all"]
+            if (reset != null) {
+                reset.actionIntent.send()
+                return "Cancelled the timer."
+            }
+            (actions["pause"] ?: actions["pause all"] ?: error("The timer has no Pause or Reset button.")).actionIntent.send()
+            delay(800)
+        }
+        error("The timer didn't stop.")
     }
 
     private fun nextAlarm(): String {
@@ -194,4 +285,38 @@ class SystemTools(private val context: Context) {
         delay(600)
         return screen.screen(false)
     }
+}
+
+/** [value] for [setting] as the tool reports it and undo restores it: on|off, or the number (volume and brightness clamped). */
+internal fun normalizeSetting(setting: String, value: String, maxVolume: Int): String {
+    val v = value.trim().lowercase()
+    fun number(): Int = v.toIntOrNull() ?: throw IllegalArgumentException("$setting takes a number.")
+    return when (setting) {
+        "wifi", "bluetooth", "dnd", "airplane", "auto_brightness", "dark_mode" -> when (v) {
+            "on", "true", "1" -> "on"
+            "off", "false", "0" -> "off"
+            else -> throw IllegalArgumentException("$setting takes on|off.")
+        }
+        "volume" -> number().coerceIn(0, maxVolume).toString()
+        "brightness" -> number().coerceIn(0, 255).toString()
+        "screen_timeout" -> number().toString()
+        else -> throw IllegalArgumentException("Unknown setting '$setting'.")
+    }
+}
+
+/**
+ * The undo of setting [setting] to [next], from the values [current] reads before the change: `restore` lists what to
+ * put back, in order (setting brightness also turns auto-brightness off, so that comes back after it; DND comes back
+ * as its exact interruption filter). `value` and `was` are the new and old values, for labels. Null when nothing changes.
+ */
+internal fun deviceUndo(setting: String, next: String, current: (String) -> String): JSONObject? {
+    val was = current(setting)
+    val autoWas = if (setting == "brightness") current("auto_brightness") else null
+    if (was == next && autoWas != "on") return null
+    val restore = JSONArray().put(
+        if (setting == "dnd") JSONObject().put("setting", "dnd_filter").put("value", current("dnd_filter"))
+        else JSONObject().put("setting", setting).put("value", was)
+    )
+    if (autoWas == "on") restore.put(JSONObject().put("setting", "auto_brightness").put("value", "on"))
+    return JSONObject().put("op", "device").put("setting", setting).put("value", next).put("was", was).put("restore", restore)
 }

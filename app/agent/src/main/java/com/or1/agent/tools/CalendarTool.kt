@@ -14,6 +14,7 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.util.Locale
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -25,8 +26,8 @@ class CalendarTool(context: Context) {
     private val shown = DateTimeFormatter.ofPattern("EEE dd MMM HH:mm", Locale.US)
     private val shownDay = DateTimeFormatter.ofPattern("EEE dd MMM", Locale.US)
 
-    fun run(args: JSONObject): String = when (val action = args.getString("action")) {
-        "list" -> list(args)
+    fun run(args: JSONObject): ToolOutput = when (val action = args.getString("action")) {
+        "list" -> ToolOutput(list(args))
         "add" -> add(args)
         "delete" -> delete(args)
         else -> throw IllegalArgumentException("Unknown action '$action'.")
@@ -56,7 +57,7 @@ class CalendarTool(context: Context) {
         return if (lines.isEmpty()) "No events from $range." else "Events from $range (event ids in brackets):\n" + lines.joinToString("\n")
     }
 
-    private fun add(args: JSONObject): String {
+    private fun add(args: JSONObject): ToolOutput {
         val title = args.optString("title").ifBlank { throw IllegalArgumentException("add needs `title`.") }
         val startText = args.optString("start").ifBlank { throw IllegalArgumentException("add needs `start` (YYYY-MM-DDTHH:MM, or YYYY-MM-DD for all day).") }
         val allDay = args.optBoolean("all_day") || !startText.contains('T')
@@ -97,16 +98,81 @@ class CalendarTool(context: Context) {
                 put(Reminders.METHOD, Reminders.METHOD_ALERT)
             })
         }
-        return "Added “$title” on $summary (event id $id)" + (if (reminder >= 0) ", with a reminder $reminder minutes before." else ".")
+        return ToolOutput(
+            "Added “$title” on $summary (event id $id)" + (if (reminder >= 0) ", with a reminder $reminder minutes before." else "."),
+            undo = JSONObject().put("op", "calendar_delete").put("event_id", id).put("title", title),
+        )
     }
 
-    private fun delete(args: JSONObject): String {
+    /** Deletes an event; the undo re-creates it from a copy of its fields and reminders (under a new id). */
+    private fun delete(args: JSONObject): ToolOutput {
         val id = args.optLong("event_id", -1).takeIf { it >= 0 } ?: throw IllegalArgumentException("delete needs `event_id` (see list).")
-        val uri = ContentUris.withAppendedId(Events.CONTENT_URI, id)
-        val title = resolver.query(uri, arrayOf(Events.TITLE), null, null, null)?.use { if (it.moveToFirst()) it.getString(0) else null }
-            ?: return "No event with id $id."
-        resolver.delete(uri, null, null)
-        return "Deleted “$title” (event id $id)."
+        val event = snapshot(id) ?: return ToolOutput("No event with id $id.")
+        resolver.delete(ContentUris.withAppendedId(Events.CONTENT_URI, id), null, null)
+        val title = event.optString(Events.TITLE)
+        return ToolOutput(
+            "Deleted “$title” (event id $id).",
+            undo = JSONObject().put("op", "calendar_restore").put("title", title).put("event", event).put("reminders", reminders(id)),
+        )
+    }
+
+    /** Undo of add. */
+    fun deleteEvent(id: Long): String {
+        val event = snapshot(id) ?: error("The event was already deleted.")
+        resolver.delete(ContentUris.withAppendedId(Events.CONTENT_URI, id), null, null)
+        return "Deleted “${event.optString(Events.TITLE)}”."
+    }
+
+    /** Undo of delete: inserts the event saved by [delete] again, with its reminders. */
+    fun restoreEvent(spec: JSONObject): String {
+        val event = JSONObject(spec.getJSONObject("event").toString())
+        // The provider wants DURATION for a recurring event and DTEND for a single one, not both.
+        if (event.has(Events.RRULE) || event.has(Events.RDATE)) event.remove(Events.DTEND) else event.remove(Events.DURATION)
+        val values = ContentValues()
+        for (key in event.keys()) when (val v = event.get(key)) {
+            is Number -> values.put(key, v.toLong())
+            else -> values.put(key, v.toString())
+        }
+        val uri = resolver.insert(Events.CONTENT_URI, values) ?: error("The calendar provider did not save the event.")
+        val id = ContentUris.parseId(uri)
+        val reminders = spec.optJSONArray("reminders")
+        for (i in 0 until (reminders?.length() ?: 0)) {
+            val r = reminders!!.getJSONObject(i)
+            resolver.insert(Reminders.CONTENT_URI, ContentValues().apply {
+                put(Reminders.EVENT_ID, id)
+                put(Reminders.MINUTES, r.getInt("minutes"))
+                put(Reminders.METHOD, r.optInt("method", Reminders.METHOD_ALERT))
+            })
+        }
+        return "Put back “${event.optString(Events.TITLE)}” (event id $id)."
+    }
+
+    /** The event's own fields (what [restoreEvent] needs), or null if there's no such event. */
+    private fun snapshot(id: Long): JSONObject? {
+        val columns = arrayOf(
+            Events.CALENDAR_ID, Events.TITLE, Events.DTSTART, Events.DTEND, Events.DURATION, Events.ALL_DAY, Events.EVENT_TIMEZONE,
+            Events.EVENT_END_TIMEZONE, Events.EVENT_LOCATION, Events.DESCRIPTION, Events.RRULE, Events.RDATE, Events.EXRULE,
+            Events.EXDATE, Events.HAS_ALARM, Events.AVAILABILITY, Events.ACCESS_LEVEL, Events.DELETED,
+        )
+        return resolver.query(ContentUris.withAppendedId(Events.CONTENT_URI, id), columns, null, null, null)?.use { c ->
+            if (!c.moveToFirst() || c.getInt(columns.indexOf(Events.DELETED)) != 0) return@use null
+            JSONObject().also { o ->
+                for ((i, name) in columns.withIndex()) {
+                    if (name == Events.DELETED || name == Events.HAS_ALARM || c.isNull(i)) continue
+                    when (c.getType(i)) {
+                        android.database.Cursor.FIELD_TYPE_INTEGER -> o.put(name, c.getLong(i))
+                        else -> o.put(name, c.getString(i))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun reminders(eventId: Long): JSONArray {
+        val out = JSONArray()
+        resolver.query(Reminders.CONTENT_URI, arrayOf(Reminders.MINUTES, Reminders.METHOD), "${Reminders.EVENT_ID} = ?", arrayOf(eventId.toString()), null)
+            ?.use { c -> while (c.moveToNext()) out.put(JSONObject().put("minutes", c.getInt(0)).put("method", c.getInt(1))) }
+        return out
     }
 
     /** The first visible calendar we can write to, or a new local "Phone" calendar. */

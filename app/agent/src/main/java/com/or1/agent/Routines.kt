@@ -9,6 +9,7 @@ import android.content.Intent
 import android.net.Uri
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import com.or1.agent.tools.ToolOutput
 import java.io.File
 import java.time.DayOfWeek
 import java.time.Instant
@@ -123,15 +124,36 @@ object Routines {
 
     // --- The routines tool -----------------------------------------------------------------------------------------
 
-    fun tool(args: JSONObject): String = when (val action = args.getString("action")) {
-        "list" -> all().joinToString("\n") { r -> "- [${r.id}] ${r.name?.let { "“$it”, " }.orEmpty()}${r.describe()}: ${r.prompt}" }.ifEmpty { "No routines." }
+    fun tool(args: JSONObject): ToolOutput = when (val action = args.getString("action")) {
+        "list" -> ToolOutput(
+            all().joinToString("\n") { r -> "- [${r.id}] ${r.name?.let { "“$it”, " }.orEmpty()}${r.describe()}: ${r.prompt}" }.ifEmpty { "No routines." }
+        )
         "add" -> add(args)
         "remove" -> {
             val id = args.optString("id").ifBlank { throw IllegalArgumentException("remove needs `id` (see list).") }
             val routine = remove(id) ?: throw IllegalArgumentException("No routine with id $id.")
-            "Removed routine $id (${routine.describe()}: ${routine.prompt})."
+            ToolOutput(
+                "Removed routine $id (${routine.describe()}: ${routine.prompt}).",
+                undo = JSONObject().put("op", "routine_restore").put("title", routine.title).put("routine", routine.toJson()),
+            )
         }
         else -> throw IllegalArgumentException("Unknown action '$action'.")
+    }
+
+    /**
+     * Puts a removed routine back (undo), under its id. A repeating one gets its next run from now; a one-off whose time
+     * has passed can't come back.
+     */
+    fun restore(routine: Routine): String {
+        require(get(routine.id) == null) { "That routine is already there." }
+        val r = when {
+            routine.onNotification || routine.next > System.currentTimeMillis() -> routine
+            routine.repeat == "once" -> throw IllegalArgumentException("Its time has passed.")
+            else -> routine.copy(next = nextRun(routine, ZonedDateTime.now(ZoneId.systemDefault())).toInstant().toEpochMilli())
+        }
+        synchronized(this) { save(all() + r) }
+        if (!r.onNotification) schedule(r)
+        return "Put back routine “${r.title}”."
     }
 
     /** Deletes a routine and its alarm (the tool, or the Routines screen). Returns what was removed. */
@@ -142,11 +164,14 @@ object Routines {
         return routine
     }
 
-    private fun add(args: JSONObject): String {
+    private fun add(args: JSONObject): ToolOutput {
         val routine = parseRoutine(args, UUID.randomUUID().toString().take(6), ZonedDateTime.now(ZoneId.systemDefault()))
         synchronized(this) { save(all() + routine) }
         if (!routine.onNotification) schedule(routine)
-        return "Created routine ${routine.id}: ${routine.describe()}: ${routine.prompt}"
+        return ToolOutput(
+            "Created routine ${routine.id}: ${routine.describe()}: ${routine.prompt}",
+            undo = JSONObject().put("op", "routine_remove").put("id", routine.id).put("title", routine.title),
+        )
     }
 
     /**

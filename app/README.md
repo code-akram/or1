@@ -108,6 +108,35 @@ in `export_agent_json.py`). Stored in `files/routines.json`.
 - Debug: `am broadcast -n com.or1.agent/.DebugReceiver --es routine <id>` runs a routine now; `--es dismiss
   pkg1,pkg2` clears those apps' notifications through the listener (the shell can't clear other apps').
 
+## Effects and undo (`Activity.kt`, `Undo.kt`)
+Every write tool call that succeeds becomes an `Effect` (docs/ui-ledger.md §4): a past-tense label, its source (chat
+transcript, routine id and label, or eval), an undo tier and an undo state (available, pending, undone, failed,
+expired, none). Reads and navigation aren't effects. `Effects.classify` is pure (JVM-tested):
+
+| Call | Tier | Undo |
+|---|---|---|
+| `device set` | 1 | put back the previous value(s) the tool read first (DND as its exact filter; brightness also restores auto-brightness); expires after 24 h or when the same setting changes again |
+| `clock set_alarm` | 1 | `ACTION_DISMISS_ALARM` by label, else by time (SKIP_UI, on the work display); expires when it rings |
+| `clock set_timer` | 1 | presses Reset (or Pause, then Reset) on the Clock app's timer notification through the listener; expires when it ends |
+| `calendar add` / `delete` | 1 | delete by event id / re-insert the saved fields and reminders |
+| `contacts add` | 1 | delete the raw contact by id (as sync adapter) |
+| `routines add` / `remove` | 1 | remove by id / restore under the same id |
+| `memory add` / `remove` | 1 | remove the note by text / put it back at its index |
+| `act tap` on a commit-like label (Save, Archive, Add, Turn…) or a switch/checkbox | 2 | sends `Undo: <label>` to the chat agent with the receipt (marked as data); undone if that request finishes |
+| `act tap` on Send/Post/Pay/Delete/Call…, `clock dismiss_alarm`, `open` a URI, `shell` (unless every part only reads) | 3 | none |
+
+Taps by coordinates, unlabeled elements, typing and keys aren't effects (the tap that sends is). The tap's label, class
+and app are read before it runs.
+- Tools return the undo data in `ToolOutput.undo`, which never reaches the model; the text stays short ("dnd set to on
+  (was off).").
+- `files/activity.jsonl`: `{"effect": …}` per effect and `{"undo": {"id", "state", "detail"}}` per state change,
+  appended; loaded on start (last 30 days, compacted past 512 KB). Pending states aren't written.
+- `AgentHub`: `ChatItem.Effect` follows the tool call that caused it (kept current as its state changes);
+  `effects` (newest first, eval left out; `.today()` for the Today tab); `undo(id)`; `memoryNotes`, `editNote`,
+  `deleteNote`, `restoreNote` (`MemoryNotes` in `tools/MemoryTool.kt`, shared with the tool and undo).
+- Debug: `--es effects list|today` writes `files/effects.txt` (and logcat tag `or1-activity`), one line per effect:
+  `id tierN state source:id label | call | detail`; `--es undo ID|last` undoes one, then writes the list once it settles.
+
 ## Audio check (`AudioCheck.kt`)
 `am broadcast -n com.or1.agent/.DebugReceiver --es audio test` records 1 s of room sound, then plays a 1 kHz tone at
 60% media volume (restored afterwards) while recording, and looks for the tone (Goertzel). Result in logcat tag
@@ -122,7 +151,7 @@ and the mic both work through the Android audio stack. `RECORD_AUDIO` is granted
 export JAVA_HOME=~/.local/share/jdk/temurin-17.0.20.1+1
 ./gradlew :agent:assembleDebug        # signed with the AOSP platform test key in ~/.config/or1/platform.p12
 ./gradlew :agent:assembleRelease      # same key, not debuggable, profileable from the shell
-./gradlew :agent:testDebugUnitTest    # JVM unit tests: routine scheduling and parsing, note de-duplication, audio maths
+./gradlew :agent:testDebugUnitTest    # JVM unit tests: routines, notes, audio maths, effect classification and undo data
 scripts/provision.sh                  # install, API key, accessibility, notification access, HOME role
 ```
 
