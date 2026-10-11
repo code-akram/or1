@@ -168,11 +168,12 @@ private fun TimerChip(timer: NowTimer, open: Boolean, onTap: () -> Unit, onCance
         }
         running -> Chip("$name, $coarse", onTap) {
             Glyph(Icons.Timer, Palette.Live)
-            CountdownText({ end - now.value }, Type.NumeralS, prefix = name)
+            // Step-size tabular digits, like the alarm chip: Numeral-s made this chip read larger than its siblings.
+            CountdownText({ end - now.value }, Type.Step.copy(color = Palette.Text, fontFeatureSettings = "tnum"), prefix = name)
         }
         timer.state == TimerState.PAUSED -> Chip("$name paused", onTap) {
             Glyph(Icons.Timer)
-            Text(timer.remainingMs?.let { ResultCards.clock(it) } ?: "Paused", style = Type.NumeralS.copy(color = Palette.Text2))
+            Text(timer.remainingMs?.let { ResultCards.clock(it) } ?: "Paused", style = Type.Step.copy(fontFeatureSettings = "tnum"))
         }
         // A timer set in the Clock app itself: its end isn't known.
         else -> Chip("$name running", onTap) {

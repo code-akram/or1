@@ -28,8 +28,8 @@ object Notifier {
         manager.notify(REPLY_ID_BASE + (replies++ % 50), build(REPLIES, "or1", reply, trigger, group = REPLIES))
 
     /**
-     * The sound and buzz for an alert in the chat. With the lockdown's notification alerts off, the system mutes
-     * notification sounds, so the chat makes its own.
+     * The sound and buzz for a routine result in the chat stream. With the lockdown's notification alerts off, the
+     * system mutes notification sounds, so the chat makes its own.
      */
     fun chime() {
         runCatching {

@@ -31,9 +31,8 @@ class NotifListener : NotificationListenerService() {
         @Volatile
         var instance: NotifListener? = null
 
-        /** Clears every clearable notification from [packages], and the chat's routine alerts if ours is one of them. */
+        /** Clears every clearable notification from [packages]. */
         fun dismiss(packages: Set<String>) {
-            if ("com.or1.agent" in packages) AgentHub.clearAlerts()
             val listener = instance ?: return
             listener.activeNotifications.filter { it.packageName in packages }.forEach { listener.cancelNotification(it.key) }
         }

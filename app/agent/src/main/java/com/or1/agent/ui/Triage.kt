@@ -104,7 +104,8 @@ private fun Sheet(onClose: () -> Unit) {
             Box(Modifier.fillMaxWidth().padding(top = 8.dp), contentAlignment = Alignment.Center) {
                 Box(Modifier.size(width = 32.dp, height = 4.dp).clip(RoundedCornerShape(2.dp)).background(Palette.Line))
             }
-            Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 20.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            // Inset 20 dp like the rows (the chip has 4 dp of touch padding of its own).
+            Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 20.dp, end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Waiting", style = Type.Label)
                 Spacer(Modifier.width(8.dp))
                 Text("$count", style = Type.Step.copy(fontFeatureSettings = "tnum"), modifier = Modifier.weight(1f))
@@ -126,7 +127,7 @@ private fun Sheet(onClose: () -> Unit) {
                         n,
                         onDismiss = { NowState.dismiss(n.key) },
                         onHandle = { NowState.handle(n); onClose() },
-                        modifier = Modifier.itemMotion(this).padding(start = 20.dp, end = 8.dp),
+                        modifier = Modifier.itemMotion(this).padding(start = 20.dp, end = 16.dp),
                     )
                 }
             }

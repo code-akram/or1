@@ -8,15 +8,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -48,11 +45,7 @@ fun MemoryView(onClose: () -> Unit) {
         pending = PendingDelete(text, "Note deleted") {}
     }
     Column(Modifier.fillMaxSize().background(Palette.Ink0).systemBarsPadding()) {
-        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconCircle(Icons.Back, "Back", onClose, tint = Palette.Text, background = Palette.Ink3)
-            Spacer(Modifier.width(12.dp))
-            Text("What or1 knows", style = Type.Label)
-        }
+        PageHeader("What or1 knows", onClose)
         Box(Modifier.fillMaxSize()) {
             LazyColumn(
                 Modifier.fillMaxSize(),
@@ -98,8 +91,8 @@ fun MemoryView(onClose: () -> Unit) {
 @Composable
 private fun NoteRow(note: String, onEdit: () -> Unit, onDelete: () -> Unit, modifier: Modifier = Modifier) {
     Row(
-        modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Palette.Ink2)
-            .border(1.dp, Palette.Line, RoundedCornerShape(16.dp)).clickable(onClick = onEdit)
+        modifier.fillMaxWidth().clip(Shapes.card).background(Palette.Ink2)
+            .border(1.dp, Palette.Line, Shapes.card).clickable(onClick = onEdit)
             .padding(start = 16.dp, top = 6.dp, bottom = 6.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

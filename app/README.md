@@ -6,12 +6,11 @@ without asking for confirmation (see Untrusted content). Apps the agent drives r
 the chat never leaves the screen.
 
 ## UI (`ui/`)
-- `ChatScreen.kt`: top bar (menu, the Now strip, new chat), a one-line serif greeting with just-in-time suggestions right above the
-  composer (`Suggestions.kt`: from notifications and battery, no API call), the conversation, the drawer with past
-  chats (`History.kt`, from `files/transcripts/`). `or1` in the status rail (`StatusRail.kt`, 48 dp tall) is the home
+- `ChatScreen.kt`: top bar (menu, the Now strip, new chat; no badges: ember only means or1 acting), the stream, the
+  composer, the drawer with past chats (`History.kt`, from `files/transcripts/`). `or1` in the status rail (`StatusRail.kt`, 48 dp tall) is the home
   button: it closes the triage sheet, the drawer, the open page (Routines, Today, What or1 knows), a past chat, the viewer and the
-  keyboard, and scrolls to the end. Back (one handler for the screen) closes the topmost of triage sheet, drawer, viewer, page, past
-  chat, then the composer; menus close themselves first. The drawer opens the pages: Today (with today's effect
+  keyboard, and scrolls to the end. Back (one handler for the screen) closes the topmost of evidence frame, triage sheet, drawer,
+  viewer, page, past chat, then the composer; menus close themselves first. The drawer opens the pages: Today (with today's effect
   count), Routines, What or1 knows. The drawer's "Developer details" switch (`DeveloperDetails.kt`, shared prefs `ui`) shows
   cost and seconds under replies, the raw call and result on tapping a step, and the session cost; off by default. A chat is renamed in place (⋯ menu or long-press: the
   title turns into a field; Done, the check or tapping away saves) or deleted with an Undo pill for 4 s (the file
@@ -48,21 +47,41 @@ the chat never leaves the screen.
   cursor-anchor computation, and Compose re-diffing the semantics tree, since the agent's accessibility service is
   always on). Measured with `gfxinfo` while typing: janky frames 80% -> ~2% (release, AOT) / ~6.5% (debug), median
   frame 53 ms -> 13 ms (release) / 16 ms (debug).
-- `Cards.kt`: one working card per turn: step blocks (`Blocks.kt`, one 3 dp block per tool call: unlit, ember while
-  running, grey when done, red when failed; the app's only progress indicator), the current step, the live thumbnail
-  of the work display; replies in serif. Under it, the receipt: one row per effect (`ChatItem.Effect`, see Effects
-  and undo): ✓ (or `warn` for irreversible), the past-tense label and a 48 dp Undo chip while `canUndo()` ("Ask or1
-  to undo" for tier 2); the march while it undoes, the label struck through and "Undone" after, the reason in red if
-  it failed, no chip once expired (each row wakes once at `expiresAt`, no ticking). Reads stay in "N steps".
+- `Stream.kt`: the stream is the conversation's turns with today's routine acts (`AgentHub.routineActs`) among them
+  by time (`interleave`, JVM-tested): each act goes before the first request made after it finished (`ChatItem.User.at`),
+  so earlier runs lead the conversation and one that finishes while the user is away comes last. A routine act is
+  "routine · <label>" (Caption) with a 48 dp ✕ (`dismissRoutineAct`), its act card ("N steps", receipt with live
+  undo) and the reply in serif; it chimes when it lands (`Notifier.chime`; the old alert banners are gone). Until the
+  stream has been in view at its bottom, the rail shows one `live` block after the wordmark. With no conversation
+  the idle home shows, bottom-anchored (scrolls from the bottom when taller): today's routine acts, "Today · N"
+  (48 dp, opens Today) over the newest six of today's other effects as dimmed receipt rows (text3, Undo chips live),
+  then the serif greeting and the suggestions (`Suggestions.kt`: from notifications and battery, no API call).
+- `Cards.kt`: one **act card** per turn (`ActCard`): a header of step blocks (`Blocks.kt`, one 4 dp block per tool
+  call, a block apart: unlit, ember while running, grey when done, red when failed; the app's only progress indicator)
+  with the current step while working and "N steps · <last step>" (Step, text2) once done; tap for every step. While
+  the turn uses the work display (`AgentHub.usingWorkDisplay`) the evidence strip and "Watch or take over ·
+  <app>" (48 dp, opens the viewer) sit under it, and collapse away when it's done; then the receipt rows. A turn with
+  only reads (no effects, no work display) gets no card, just the header line (48 dp, expands). Result cards follow the
+  act card, then the reply in serif, all 8 dp apart; long-press a reply to copy it ("Copied" under it for 1.2 s). A
+  receipt row (`ReceiptRow`, also Today's and the idle home's): ✓, `warn` plus an "irreversible" caption (tier 3), an
+  undo arrow once undone; the past-tense label; a 48 dp Undo chip while `canUndo()` (tier 2 too, captioned "via or1
+  · <app>", then "Undoing in <app>…" with the march); the label struck through and "Undone" after, the reason in red
+  if it failed, no chip once expired (each row wakes once at `expiresAt`, no ticking). Every card is `Shapes.card`
+  (16 dp).
+- `EvidenceViews.kt`: the evidence strip, a 96 dp full-width crop of the work display's preview centred on the last
+  tap with a 10 dp ember ring at `Evidence.lastTap` for `RING_MS` (720x1600 scaled to the crop; frames and the ring
+  are drawn in the draw phase, a tap recomposes the strip once); a receipt row's evidence frame as a 40×28 dp thumbnail
+  before its chip (decoded off the main thread, a dozen cached; none when the file is gone), which opens the frame full
+  size on ink0 with its label and time (tap or Back closes; `or1` too).
 - `NowStrip.kt`: the Now strip, as chips in the top bar between the menu and new chat (no extra band; nothing when
   nothing is live), from `NowState.chips`: 36 dp `ink4` chips with a hairline in 48 dp targets, at most four then
-  "+N". A running timer ticks its digits (Numeral-s) at each second boundary in one Text; "Done" in `live` once it
+  "+N", all in Step type. A running timer ticks its tabular digits at each second boundary in one Text; "Done" in `live` once it
   rings; a tap scrolls to its card, or offers Cancel when the card isn't in this chat. The alarm (`HH:mm`, tap for
   Off), the next event ("in 25 min", on the minute), the routine running (the ember march; opens Routines) and
   "4 new" (opens the triage sheet). Each chip's semantics are one coarse description ("Timer, about 9 minutes
   left"), so ticking doesn't churn the accessibility tree.
 - `ResultCards.kt`: live result cards between a turn's receipt and its reply, derived from its tool calls and effects
-  (`ResultCards.of`, JVM-tested), never from the reply: timer (Numeral countdown, a meter of 3 dp block columns,
+  (`ResultCards.of`, JVM-tested), never from the reply: timer (Numeral countdown, a meter of 4 dp block columns,
   Cancel; then "Time's up", "Timer done" or "Cancelled"), alarm (time, label, day, Off), settings changed (the
   receipt rows themselves), notifications waiting (by app, two-line rows with Dismiss and Handle, live from
   `NowState`), contacts found or added (tap a number or address to copy) and a routine created (trigger, next run,
@@ -70,11 +89,13 @@ the chat never leaves the screen.
   the receipt. Only the newest four cards that follow a source are live (one notifications card); older ones are
   frozen text.
 - `Triage.kt`: the triage sheet (`ink3`, 16 dp top corners, hairline; slides 24 dp up with a fade over a flat dim):
-  notifications waiting by app with the same rows, "Handle all" (`NowState.handleAll`, one request covering them).
+  notifications waiting by app with the same rows, inset 20 dp on both sides, "Handle all" (`NowState.handleAll`, one request covering them).
   Back, `or1`, a tap on the dim or dragging its top edge down closes it; handling closes it so the request shows.
-- `ActivityScreen.kt` (Today): every effect of today's chats and routine runs from `AgentHub.effects`, newest first
-  (time, label, "Chat" / "Routine · …", undo state), the rest of the week under a collapsed "Earlier this week".
-  A tier-2 undo closes it, so the new request shows in the chat.
+- `ActivityScreen.kt` (Today): every effect of today's chats and routine runs from `AgentHub.effects`, newest first,
+  in one receipt card inset 20 dp (time in a 48 dp Step tabular column, label, "Chat" / "Routine · …", undo state);
+  the rest of the week under a collapsed "Earlier this week", a card per day. A tier-2 undo leaves it open: the row
+  says "Undoing in <app>…" while the request runs in the chat. Page titles (Today, Routines, What or1 knows) are
+  `Type.Title` (Sans 20/26 medium, `PageHeader`).
 - `MemoryScreen.kt` (What or1 knows): the memory notes; tap or ⋯ Edit edits one in place (a blank one is deleted),
   ⋯ Delete removes it at once with the 4 s Undo pill putting it back (`restoreNote`).
 - `WorkViewer.kt`: the work display full screen, and usable. Touches are forwarded (scaled to 720x1600); while or1
@@ -166,9 +187,9 @@ in `export_agent_json.py`). Stored in `files/routines.json`.
   `routine_run` now logs `label`, `routine_reply` logs `failed`, `stopped` and the run's effect ids (older runs match
   effects by routine id and time). `dismissRoutineAct(id)` hides one (files/routine-acts-dismissed.txt). Debug:
   `--es acts list` writes files/routine-acts.txt.
-- Runs act without asking, like the chat. With the system UI locked down, finished runs leave result banners at
-  the top of the chat (with a chime; the three newest; dismissable). A run is labelled "Name · trigger" (or just
-  the trigger) in the chat, the banner and the notification. The old "routine-approvals" notification channel is
+- Runs act without asking, like the chat. With the system UI locked down, a finished run lands in the chat stream as
+  an act (see `Stream.kt` under UI) with a chime. A run is labelled "Name · trigger" (or just the trigger) in the
+  stream and the notification. The old "routine-approvals" notification channel is
   deleted on startup.
 - Debug: `am broadcast -n com.or1.agent/.DebugReceiver --es routine <id>` runs a routine now; `--es dismiss
   pkg1,pkg2` clears those apps' notifications through the listener (the shell can't clear other apps').
@@ -349,7 +370,7 @@ The user doesn't use apps on this phone; the agent does. The app closes the syst
   empty 48dp strip holding the composer off the bottom edge and sitting under the keyboard. Needs a reboot; `0` and a
   reboot bring it back (e.g. with the lockdown off).
 - Notifications reach the user through the chat: other apps' as suggestions and through the agent's notifications
-  tool, routines' as banners (see Routines). The chat makes its own chime, since the lockdown mutes notification
+  tool, routines' as acts in the stream (see Routines). The chat makes its own chime, since the lockdown mutes notification
   sounds.
 - Without a back button, every screen has its own close or back control, and tapping empty chat space closes the
   keyboard, as does tapping the top bar (the keyboard's own hide key also works).

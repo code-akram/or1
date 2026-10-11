@@ -6,7 +6,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,7 +22,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -31,9 +29,7 @@ import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.DrawerValue
@@ -49,6 +45,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
@@ -77,15 +74,16 @@ import androidx.compose.ui.unit.dp
 import com.or1.agent.AgentHub
 import com.or1.agent.ChatItem
 import com.or1.agent.NotifListener
+import com.or1.agent.RoutineAct
 import com.or1.agent.Routines
 import com.or1.agent.today
-import com.or1.agent.tools.HiddenDisplay
 import java.util.Calendar
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * The phone's home screen: the conversation (or a one-line greeting and suggestions just above the composer), the
+ * The phone's home screen: the stream (the conversation with today's routine acts among its turns; when it's empty, the
+ * idle home: routine acts, today's effects dimmed, the greeting and suggestions just above the composer), the
  * composer, the drawer with past chats, and the screens that open over them. `or1` in the rail goes home from
  * anywhere; Back closes the topmost layer. The Now strip's chips sit in the top bar, between the menu and new chat; the
  * notifications chip opens the triage sheet.
@@ -97,10 +95,9 @@ fun ChatScreen() {
         val context = LocalContext.current
         val items by AgentHub.items.collectAsState()
         val conversation by AgentHub.conversation.collectAsState()
-        val alerts by AgentHub.alerts.collectAsState()
         val busy by AgentHub.busy.collectAsState()
         val totalCost by AgentHub.totalCost.collectAsState()
-        val preview by HiddenDisplay.preview.collectAsState()
+        val routineActs by AgentHub.routineActs.collectAsState()
         val notificationTick by NotifListener.changes.collectAsState()
         val routines by Routines.list.collectAsState()
         val showRoutines by AgentHub.showRoutines.collectAsState()
@@ -119,6 +116,8 @@ fun ChatScreen() {
         var triageOpen by remember { mutableStateOf(false) }
         // A timer chip tapped: the stream scrolls to the turn with that effect.
         var scrollTo by remember { mutableStateOf<Focus?>(null) }
+        // An evidence frame shown full size, over everything.
+        var evidence by remember { mutableStateOf<com.or1.agent.Effect?>(null) }
         LaunchedEffect(showRoutines) {
             if (showRoutines) {
                 page = Page.ROUTINES
@@ -180,6 +179,7 @@ fun ChatScreen() {
         // Everything that can be open over the idle chat closes; typed text stays in the composer.
         fun goHome() {
             scope.launch { drawer.close() }
+            evidence = null
             triageOpen = false
             viewerOpen = false
             voiceOpen = false
@@ -195,6 +195,7 @@ fun ChatScreen() {
         // popups and close themselves first. Always enabled: Back at home stays home (this is the HOME app).
         BackHandler {
             when {
+                evidence != null -> evidence = null
                 triageOpen -> triageOpen = false
                 // Drawn over everything below.
                 drawer.isOpen -> scope.launch { drawer.close() }
@@ -206,9 +207,18 @@ fun ChatScreen() {
             }
         }
 
+        // A routine act the user hasn't seen: one block in the rail until the stream has been in view at its bottom.
+        var routinesSeenUntil by rememberSaveable { mutableLongStateOf(0L) }
+        var streamAtBottom by remember { mutableStateOf(true) }
+        val newestRoutine = routineActs.lastOrNull()?.finished ?: 0L
+        val streamShown = page == null && pastChat == null && !viewerOpen && !voiceOpen && !triageOpen && evidence == null && !drawer.isOpen
+        LaunchedEffect(streamShown, streamAtBottom, newestRoutine) {
+            if (streamShown && streamAtBottom) routinesSeenUntil = newestRoutine
+        }
+
         // The rail first, below the status bar and the notch; every screen and the drawer below it.
         Column(Modifier.fillMaxSize().background(Palette.Ink0)) {
-            StatusRail(busy, onHome = ::goHome)
+            StatusRail(busy, onHome = ::goHome, unseen = newestRoutine > routinesSeenUntil)
             Box(Modifier.weight(1f).consumeWindowInsets(WindowInsets.statusBars)) {
                 ModalNavigationDrawer(
                     drawerState = drawer,
@@ -231,83 +241,89 @@ fun ChatScreen() {
                         triageOpen = true
                     }
                     val cardActions = remember { CardActions(openRoutines = { page = Page.ROUTINES }, openTriage = openTriage) }
-                    Box(Modifier.fillMaxSize().background(Palette.Ink0)) {
-                        Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
-                            TopBar(
-                                onBlankTap = ::closeComposer,
-                                showDot = suggestions.any { it.appIcon != null },
-                                showNewChat = items.isNotEmpty(),
-                                onMenu = { scope.launch { drawer.open() } },
-                                onNewChat = { AgentHub.newConversation() },
-                            ) {
-                                NowStrip(
-                                    onTimer = { timer ->
-                                        // To its card when it's in this conversation; otherwise the chip offers Cancel.
-                                        val here = items.any { it is ChatItem.Effect && it.effect.id == timer.id }
-                                        if (here) scrollTo = Focus(timer.id, (scrollTo?.n ?: 0) + 1)
-                                        here
-                                    },
-                                    onTriage = openTriage,
-                                    onRoutine = { page = Page.ROUTINES },
-                                )
-                            }
-                            for (alert in alerts) {
-                                AlertBanner(alert, onOpen = { page = Page.ROUTINES }, onDismiss = { AgentHub.dismissAlert(alert.id) })
-                            }
-                            // Tapping empty space closes the keyboard: with the system UI locked down there's no back button.
-                            Box(
-                                Modifier.weight(1f).fillMaxWidth().clickable(
-                                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                                    indication = null,
-                                    onClick = ::closeComposer,
-                                ),
-                            ) {
-                                if (items.isEmpty()) {
-                                    EmptyState(suggestions, onSuggestion = { send(it.prompt) })
-                                } else {
-                                    // A list per conversation: the old turns' exit animations otherwise get stuck when the
-                                    // items are replaced in one go (a fresh conversation), leaving them drawn under the new one.
-                                    key(conversation) {
-                                        CompositionLocalProvider(LocalCardActions provides cardActions) {
-                                            Conversation(items, busy, preview, homeTaps, scrollTo, onOpenPreview = { viewerOpen = true })
+                    val openEvidence = remember { { e: com.or1.agent.Effect -> closeComposer(); evidence = e } }
+                    CompositionLocalProvider(LocalEvidenceViewer provides openEvidence) {
+                        Box(Modifier.fillMaxSize().background(Palette.Ink0)) {
+                            Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
+                                TopBar(
+                                    onBlankTap = ::closeComposer,
+                                    showNewChat = items.isNotEmpty(),
+                                    onMenu = { scope.launch { drawer.open() } },
+                                    onNewChat = { AgentHub.newConversation() },
+                                ) {
+                                    NowStrip(
+                                        onTimer = { timer ->
+                                            // To its card when it's in this conversation; otherwise the chip offers Cancel.
+                                            val here = items.any { it is ChatItem.Effect && it.effect.id == timer.id }
+                                            if (here) scrollTo = Focus(timer.id, (scrollTo?.n ?: 0) + 1)
+                                            here
+                                        },
+                                        onTriage = openTriage,
+                                        onRoutine = { page = Page.ROUTINES },
+                                    )
+                                }
+                                // Tapping empty space closes the keyboard: with the system UI locked down there's no back button.
+                                Box(
+                                    Modifier.weight(1f).fillMaxWidth().clickable(
+                                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                        indication = null,
+                                        onClick = ::closeComposer,
+                                    ),
+                                ) {
+                                    if (items.isEmpty()) {
+                                        IdleHome(
+                                            suggestions, routineActs, greeting(), onSuggestion = { send(it.prompt) },
+                                            onToday = { closeComposer(); page = Page.TODAY }, onAtBottom = { streamAtBottom = it },
+                                        )
+                                    } else {
+                                        // A list per conversation: the old turns' exit animations otherwise get stuck when the
+                                        // items are replaced in one go (a fresh conversation), leaving them drawn under the new one.
+                                        key(conversation) {
+                                            CompositionLocalProvider(LocalCardActions provides cardActions) {
+                                                Conversation(
+                                                    items, routineActs, busy, homeTaps, scrollTo, onOpenPreview = { viewerOpen = true },
+                                                    onAtBottom = { streamAtBottom = it },
+                                                )
+                                            }
                                         }
                                     }
                                 }
+                                Composer(
+                                    input = input,
+                                    busy = busy,
+                                    expanded = expanded,
+                                    onExpand = { expanded = it },
+                                    onSend = { send(input.text) },
+                                    onStop = AgentHub::stop,
+                                    onPlusAction = {
+                                        when (it) {
+                                            PlusAction.NEW_CHAT -> AgentHub.newConversation()
+                                            PlusAction.WORK_SCREEN -> viewerOpen = true
+                                            PlusAction.DRAWER -> { closeComposer(); scope.launch { drawer.open() } }
+                                        }
+                                    },
+                                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 10.dp),
+                                    onVoiceMode = { closeComposer(); voiceOpen = true },
+                                )
                             }
-                            Composer(
-                                input = input,
-                                busy = busy,
-                                expanded = expanded,
-                                onExpand = { expanded = it },
-                                onSend = { send(input.text) },
-                                onStop = AgentHub::stop,
-                                onPlusAction = {
-                                    when (it) {
-                                        PlusAction.NEW_CHAT -> AgentHub.newConversation()
-                                        PlusAction.WORK_SCREEN -> viewerOpen = true
-                                        PlusAction.DRAWER -> { closeComposer(); scope.launch { drawer.open() } }
-                                    }
-                                },
-                                modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 10.dp),
-                                onVoiceMode = { closeComposer(); voiceOpen = true },
-                            )
+                            pastChat?.let { HistoryView(it, onClose = { pastChat = null }) }
+                            when (page) {
+                                Page.ROUTINES -> RoutinesView(onClose = { page = null }, onOpenPreview = { viewerOpen = true })
+                                Page.TODAY -> ActivityView(onClose = { page = null })
+                                Page.MEMORY -> MemoryView(onClose = { page = null })
+                                null -> {}
+                            }
+                            if (viewerOpen) {
+                                WorkViewer(
+                                    onClose = { viewerOpen = false },
+                                    // Back to the chat with the composer open, to ask about what's on the work screen.
+                                    onAsk = { viewerOpen = false; page = null; expanded = true },
+                                )
+                            }
+                            evidence?.let { EvidenceViewer(it, onClose = { evidence = null }) }
+                            TriageSheet(triageOpen, onClose = { triageOpen = false })
+                            VoiceModeHost(voiceOpen, onClose = { voiceOpen = false })
                         }
-                        pastChat?.let { HistoryView(it, onClose = { pastChat = null }) }
-                        when (page) {
-                            Page.ROUTINES -> RoutinesView(onClose = { page = null }, onOpenPreview = { viewerOpen = true })
-                            Page.TODAY -> ActivityView(onClose = { page = null })
-                            Page.MEMORY -> MemoryView(onClose = { page = null })
-                            null -> {}
-                        }
-                        if (viewerOpen) {
-                            WorkViewer(
-                                onClose = { viewerOpen = false },
-                                // Back to the chat with the composer open, to ask about what's on the work screen.
-                                onAsk = { viewerOpen = false; page = null; expanded = true },
-                            )
-                        }
-                        TriageSheet(triageOpen, onClose = { triageOpen = false })
-                        VoiceModeHost(voiceOpen, onClose = { voiceOpen = false })
                     }
                 }
             }
@@ -318,7 +334,7 @@ fun ChatScreen() {
 /** Menu | the Now strip's chips | new chat, in one 48 dp row: no extra band, and nothing in the middle when nothing is live. */
 @Composable
 private fun TopBar(
-    onBlankTap: () -> Unit, showDot: Boolean, showNewChat: Boolean, onMenu: () -> Unit, onNewChat: () -> Unit,
+    onBlankTap: () -> Unit, showNewChat: Boolean, onMenu: () -> Unit, onNewChat: () -> Unit,
     chips: @Composable () -> Unit,
 ) {
     Row(
@@ -327,55 +343,15 @@ private fun TopBar(
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box {
-            IconCircle(Icons.Menu, "Menu", onMenu, tint = Palette.Text, background = Color.Transparent, size = 48)
-            if (showDot) {
-                Box(
-                    Modifier.align(Alignment.TopEnd).offset(x = (-8).dp, y = 9.dp).size(8.dp)
-                        .clip(CircleShape).background(Palette.Ember),
-                )
-            }
-        }
+        // No badge: ember only ever means or1 acting now.
+        IconCircle(Icons.Menu, "Menu", onMenu, tint = Palette.Text, background = Color.Transparent, size = 48)
         Box(Modifier.weight(1f).padding(start = 4.dp)) { chips() }
         if (showNewChat) IconCircle(Icons.NewChat, "New chat", onNewChat, tint = Palette.Text, background = Color.Transparent, size = 48)
     }
 }
 
-/** A routine result; tapping opens the Routines screen. */
 @Composable
-private fun AlertBanner(alert: com.or1.agent.Alert, onOpen: () -> Unit, onDismiss: () -> Unit) {
-    Row(
-        Modifier
-            .padding(horizontal = 12.dp, vertical = 4.dp)
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(Palette.Ink2)
-            .border(1.dp, Palette.Line, RoundedCornerShape(16.dp))
-            .clickable(onClick = onOpen)
-            .padding(start = 14.dp, end = 0.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Icons.Routine, null, tint = Palette.Text, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(10.dp))
-        // Two lines: the full text is on the Routines screen, a tap away.
-        Text(alert.text, style = Type.Step.copy(color = Palette.Text), maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        IconCircle(Icons.Close, "Dismiss", onDismiss, tint = Palette.Text2, background = Color.Transparent)
-    }
-}
-
-@Composable
-private fun EmptyState(suggestions: List<Suggestion>, onSuggestion: (Suggestion) -> Unit) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        Spacer(Modifier.weight(1f))
-        Text(greeting(), style = Type.CaptionSerif, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 8.dp, bottom = 4.dp))
-        Column(Modifier.padding(bottom = 4.dp)) {
-            for (s in suggestions) SuggestionRow(s) { onSuggestion(s) }
-        }
-    }
-}
-
-@Composable
-private fun SuggestionRow(s: Suggestion, onClick: () -> Unit) {
+internal fun SuggestionRow(s: Suggestion, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -404,27 +380,31 @@ private fun greeting(): String = when (Calendar.getInstance().get(Calendar.HOUR_
     else -> "Late night. What's on your mind?"
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+/** The conversation's turns with today's routine acts among them by time ([interleave]). */
 @Composable
 private fun Conversation(
-    items: List<ChatItem>, busy: Boolean, preview: android.graphics.Bitmap?, homeTaps: Int, focus: Focus?, onOpenPreview: () -> Unit,
+    items: List<ChatItem>, routineActs: List<RoutineAct>, busy: Boolean, homeTaps: Int, focus: Focus?, onOpenPreview: () -> Unit,
+    onAtBottom: (Boolean) -> Unit,
 ) {
     val turns = remember(items) { groupTurns(items) }
     // Result cards per turn; only the newest few follow their sources (ResultCards.MAX_LIVE).
     val cards = remember(turns) { turns.map { ResultCards.of(it) } }
     val live = remember(cards) { ResultCards.liveKeys(cards) }
+    val entries = remember(turns, routineActs) { interleave(turns, routineActs) }
     val list = rememberLazyListState()
+    val atBottom by remember { derivedStateOf { !list.canScrollForward } }
+    LaunchedEffect(atBottom) { onAtBottom(atBottom) }
     LaunchedEffect(focus) {
         val id = focus?.effectId ?: return@LaunchedEffect
-        val index = turns.indexOfFirst { turn -> turn.effects.any { it.effect.id == id } }
+        val index = entries.indexOfFirst { e -> e is StreamEntry.Act && e.turn.effects.any { it.effect.id == id } }
         if (index >= 0) list.animateScrollToItem(index)
     }
-    LaunchedEffect(items.size, items.lastOrNull()) {
-        if (turns.isNotEmpty()) list.animateScrollToItem(turns.lastIndex, scrollOffset = Int.MAX_VALUE / 2)
+    LaunchedEffect(items.size, items.lastOrNull(), routineActs.size) {
+        if (entries.isNotEmpty()) list.animateScrollToItem(entries.lastIndex, scrollOffset = Int.MAX_VALUE / 2)
     }
     // A jump, not an animated scroll: it can be a long way.
     LaunchedEffect(homeTaps) {
-        if (homeTaps > 0 && turns.isNotEmpty()) list.scrollToItem(turns.lastIndex, scrollOffset = Int.MAX_VALUE / 2)
+        if (homeTaps > 0 && entries.isNotEmpty()) list.scrollToItem(entries.lastIndex, scrollOffset = Int.MAX_VALUE / 2)
     }
     LazyColumn(
         state = list,
@@ -432,37 +412,33 @@ private fun Conversation(
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-        itemsIndexed(turns, key = { _, turn -> turn.key }) { i, turn ->
-            val last = i == turns.lastIndex
-            TurnView(turn, active = last && busy, preview = if (last) preview else null, onOpenPreview, Modifier.itemMotion(this), cards[i], live)
+        items(entries, key = { it.key }) { entry ->
+            when (entry) {
+                is StreamEntry.Act -> TurnView(
+                    entry.turn, active = entry.index == turns.lastIndex && busy, onOpenPreview, Modifier.itemMotion(this),
+                    cards[entry.index], live,
+                )
+                is StreamEntry.Routine -> RoutineActView(entry.act, Modifier.itemMotion(this))
+            }
         }
     }
 }
 
 /**
- * One act: the request, its work card and receipt, its result cards, notes and the reply (the chat, and the routines
- * thread). Effects a card stands for (a timer's Cancel, an alarm's Off, a setting, a routine) leave the receipt. Cards
- * whose key is in [live] follow their sources; the rest render frozen.
+ * One act: the request, its act card (steps, evidence while working, receipt), its result cards, notes and the reply
+ * (the chat, and the routines thread). Effects a card stands for (a timer's Cancel, an alarm's Off, a setting, a
+ * routine) leave the receipt. Cards whose key is in [live] follow their sources; the rest render frozen.
  */
 @Composable
 fun TurnView(
-    turn: Turn, active: Boolean, preview: android.graphics.Bitmap?, onOpenPreview: () -> Unit, modifier: Modifier = Modifier,
+    turn: Turn, active: Boolean, onOpenPreview: () -> Unit, modifier: Modifier = Modifier,
     cards: List<ResultCard> = remember(turn) { ResultCards.of(turn) }, live: Set<String> = emptySet(),
 ) {
-    val receipt = remember(turn, cards) { ResultCards.receipt(turn, cards) }
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = modifier) {
+    val receipt = remember(turn, cards) { ResultCards.receipt(turn, cards).map { it.effect } }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = modifier) {
         turn.user?.let { UserBubble(it) }
-        if (turn.steps.isNotEmpty() || active) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                WorkCard(turn, active, preview, onOpenPreview)
-                if (receipt.isNotEmpty()) Receipt(receipt)
-            }
-        }
-        if (cards.isNotEmpty()) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                for (card in cards) key(card.key) { ResultCardView(card, card.key in live) }
-            }
-        }
+        if (turn.toolCalls.isNotEmpty() || active || receipt.isNotEmpty()) ActCard(turn, active, receipt, onOpenPreview)
+        for (card in cards) key(card.key) { ResultCardView(card, card.key in live) }
         for (info in turn.infos) InfoLine(info)
         turn.reply?.let { ReplyBlock(it) } ?: turn.draft?.let { ReplyBlock(ChatItem.Reply(it.id, it.text, 0.0, 0.0)) }
     }
