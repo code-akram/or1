@@ -54,7 +54,7 @@ fun AppGrid(onOpen: (Intent) -> Unit) {
                 .sortedBy { it.label.lowercase() }
         }
     }
-    Column(Modifier.fillMaxSize().background(Palette.Background).padding(top = 48.dp)) {
+    Column(Modifier.fillMaxSize().background(Palette.Ink0).padding(top = 48.dp)) {
         Wordmark(block = 6.dp, modifier = Modifier.padding(start = 28.dp, bottom = 28.dp))
         LazyVerticalGrid(
             columns = GridCells.Fixed(4),

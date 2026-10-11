@@ -1,8 +1,16 @@
 package com.or1.agent.ui
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -10,31 +18,45 @@ import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.or1.agent.R
 
 /**
- * Pure black background (continuous with the boot screens, see brand/), warm near-black surfaces, a white primary action
- * and a single terracotta accent used sparingly.
+ * The Ledger palette (docs/ui-ledger.md): pure black window (continuous with the boot screens, see brand/), warm
+ * near-black surfaces in four steps, warm greys for text, and ember only for what or1 is doing right now. The LCD
+ * leaks light through black, so surfaces are told apart by hairlines, never by luminance alone.
  */
 object Palette {
-    val Background = Color(0xFF000000)
-    val Surface = Color(0xFF262624)
-    val SurfaceHigh = Color(0xFF30302E)
-    val SurfaceSunken = Color(0xFF141413)
-    val Border = Color(0xFF393835)
+    /** Window and rail. */
+    val Ink0 = Color(0xFF000000)
+    /** Sunken: code, the work screen's mat. */
+    val Ink1 = Color(0xFF141413)
+    /** Stream cards. */
+    val Ink2 = Color(0xFF1C1B19)
+    /** Composer, sheets. */
+    val Ink3 = Color(0xFF262624)
+    /** Chips, pressed, user bubbles, menus. */
+    val Ink4 = Color(0xFF30302E)
+    val Line = Color(0xFF3E3C38)
+    /** The border of a card that is live (or1 working in it). */
+    val LineStrong = Color(0xFF4A4844)
     val Text = Color(0xFFECEAE4)
-    val TextDim = Color(0xFF9C9A92)
-    val TextFaint = Color(0xFF6E6C66)
-    val Placeholder = Color(0xFF8A8880)
+    val Text2 = Color(0xFF9C9A92)
+    /** Tertiary text, dimmed history. */
+    val Text3 = Color(0xFF6E6C66)
+    /** or1 is acting right now; never decoration. */
+    val Ember = Color(0xFFD97757)
+    val EmberDim = Color(0xFF6B3A28)
+    /** Something that is the user's and running: their turn on the agent screen, a timer, listening. */
+    val Live = Color(0xFF8FBF8A)
+    /** An irreversible effect. */
+    val Warn = Color(0xFFE5B65C)
+    val Error = Color(0xFFE5857A)
+    /** The round primary button. */
     val Primary = Color(0xFFF4F3EE)
     val OnPrimary = Color(0xFF1A1918)
-    val Accent = Color(0xFFD97757)
-    val Error = Color(0xFFE5857A)
-    val Success = Color(0xFF8FBF8A)
 }
 
 object Fonts {
@@ -48,19 +70,52 @@ object Fonts {
     )
 }
 
+/** Four voices: serif for the agent's words, sans for the phone's facts, mono for raw tool calls, pixels for system state. */
 object Type {
-    val Greeting = TextStyle(fontFamily = Fonts.Serif, fontSize = 30.sp, lineHeight = 38.sp, color = Palette.Text, letterSpacing = (-0.3).sp)
-    /** Agent replies read like prose. */
     val Reply = TextStyle(fontFamily = Fonts.Serif, fontSize = 17.sp, lineHeight = 26.sp, color = Palette.Text)
+    /** Voice mode's spoken reply. */
+    val Spoken = TextStyle(fontFamily = Fonts.Serif, fontSize = 24.sp, lineHeight = 32.sp, color = Palette.Text)
+    /** The one-line greeting above the suggestions. */
+    val CaptionSerif = TextStyle(fontFamily = Fonts.Serif, fontSize = 16.sp, lineHeight = 22.sp, color = Palette.Text2)
     val Body = TextStyle(fontFamily = Fonts.Sans, fontSize = 16.sp, lineHeight = 23.sp, color = Palette.Text)
-    val Input = TextStyle(fontFamily = Fonts.Sans, fontSize = 17.sp, lineHeight = 24.sp, color = Palette.Text)
-    val Suggestion = TextStyle(fontFamily = Fonts.Sans, fontSize = 16.sp, lineHeight = 22.sp, color = Palette.Text)
     val Label = TextStyle(fontFamily = Fonts.Sans, fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium, color = Palette.Text)
-    val Chip = TextStyle(fontFamily = Fonts.Sans, fontSize = 14.sp, color = Palette.Text)
-    val Step = TextStyle(fontFamily = Fonts.Sans, fontSize = 14.sp, lineHeight = 20.sp, color = Palette.TextDim)
-    val Thinking = TextStyle(fontFamily = Fonts.Sans, fontSize = 13.sp, lineHeight = 19.sp, fontStyle = FontStyle.Italic, color = Palette.TextFaint)
-    val Mono = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 17.sp, color = Palette.TextDim)
-    val Caption = TextStyle(fontFamily = Fonts.Sans, fontSize = 12.sp, color = Palette.TextFaint)
+    val Step = TextStyle(fontFamily = Fonts.Sans, fontSize = 14.sp, lineHeight = 20.sp, color = Palette.Text2)
+    val Caption = TextStyle(fontFamily = Fonts.Sans, fontSize = 12.sp, lineHeight = 16.sp, color = Palette.Text3)
+    /** Tabular figures, so ticking numbers don't jitter sideways. */
+    val Numeral = TextStyle(
+        fontFamily = Fonts.Sans, fontSize = 44.sp, lineHeight = 48.sp, fontWeight = FontWeight.Medium, color = Palette.Text,
+        fontFeatureSettings = "tnum",
+    )
+    val NumeralS = TextStyle(fontFamily = Fonts.Sans, fontSize = 22.sp, lineHeight = 26.sp, color = Palette.Text, fontFeatureSettings = "tnum")
+    val Mono = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 17.sp, color = Palette.Text2)
+}
+
+/**
+ * Motion is quantised: only layout eases (size and position, fast-out-slow-in); state changes step. Three durations,
+ * plus the pixel blocks' rates. No blur, no shadows, no scale above 1.04.
+ */
+object Motion {
+    /** Colour and alpha. */
+    const val FAST = 120
+    /** Size and position. */
+    const val LAYOUT = 220
+    /** A surface coming in: slides [ENTER_SLIDE] and fades. */
+    const val ENTER = 360
+    val ENTER_SLIDE = 24.dp
+    /** One step of the marching blocks. */
+    const val MARCH_MS = 180L
+
+    fun <T> enter() = tween<T>(ENTER, easing = FastOutSlowInEasing)
+    fun <T> layout() = tween<T>(LAYOUT, easing = FastOutSlowInEasing)
+    fun <T> fade() = tween<T>(FAST)
+
+    val expand = expandVertically(layout()) + fadeIn(fade())
+    val collapse = shrinkVertically(layout()) + fadeOut(fade())
+}
+
+/** animateItem with the quantised durations. */
+fun Modifier.itemMotion(scope: LazyItemScope): Modifier = with(scope) {
+    this@itemMotion.animateItem(fadeInSpec = Motion.fade(), placementSpec = Motion.layout(), fadeOutSpec = Motion.fade())
 }
 
 @Composable
@@ -69,12 +124,12 @@ fun Or1Theme(content: @Composable () -> Unit) {
         colorScheme = darkColorScheme(
             primary = Palette.Primary,
             onPrimary = Palette.OnPrimary,
-            background = Palette.Background,
-            surface = Palette.Surface,
-            surfaceContainer = Palette.Surface,
+            background = Palette.Ink0,
+            surface = Palette.Ink3,
+            surfaceContainer = Palette.Ink3,
             onBackground = Palette.Text,
             onSurface = Palette.Text,
-            outline = Palette.Border,
+            outline = Palette.Line,
         ),
         content = content,
     )

@@ -9,12 +9,6 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
-import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -43,7 +37,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -64,7 +57,6 @@ import kotlinx.coroutines.withContext
  */
 @Composable
 fun WorkViewer(onClose: () -> Unit, onAsk: () -> Unit) {
-    BackHandler(onBack = onClose)
     val busy by AgentHub.busy.collectAsState()
     val routineBusy by AgentHub.routineBusy.collectAsState()
     val working = busy || routineBusy
@@ -80,20 +72,20 @@ fun WorkViewer(onClose: () -> Unit, onAsk: () -> Unit) {
     Column(
         Modifier
             .fillMaxSize()
-            .background(Palette.SurfaceSunken)
+            .background(Palette.Ink1)
             .clickable(enabled = false) {}
             .systemBarsPadding()
             .padding(horizontal = 16.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            IconCircle(Icons.Close, "Close", onClose, tint = Palette.Text, background = Palette.Surface)
+            IconCircle(Icons.Close, "Close", onClose, tint = Palette.Text, background = Palette.Ink3)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(app ?: "Agent screen", style = Type.Label, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(if (working) "or1 is working · touch to take over" else "Your turn · tap and type as usual", style = Type.Caption)
             }
-            StatusDot(working, Modifier.padding(end = 8.dp))
+            if (working) March(Modifier.padding(end = 8.dp)) else Steady(Modifier.padding(end = 8.dp))
         }
         Spacer(Modifier.size(12.dp))
         Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -102,7 +94,7 @@ fun WorkViewer(onClose: () -> Unit, onAsk: () -> Unit) {
                 modifier = Modifier
                     .aspectRatio(720f / 1600f)
                     .clip(RoundedCornerShape(18.dp))
-                    .border(1.dp, if (working) Palette.Accent.copy(alpha = 0.6f) else Palette.Border, RoundedCornerShape(18.dp)),
+                    .border(1.dp, if (working) Palette.Ember else Palette.Line, RoundedCornerShape(18.dp)),
             )
         }
         Spacer(Modifier.size(12.dp))
@@ -144,19 +136,6 @@ private fun rememberWorkScreenApp(): String? {
     return app
 }
 
-/** Pulses in the accent colour while or1 works; steady green when it's the user's turn. */
-@Composable
-fun StatusDot(working: Boolean, modifier: Modifier = Modifier) {
-    val pulse by rememberInfiniteTransition(label = "pulse").animateFloat(
-        initialValue = 0.35f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "pulse",
-    )
-    Box(
-        modifier.size(10.dp).alpha(if (working) pulse else 1f).clip(CircleShape)
-            .background(if (working) Palette.Accent else Palette.Success),
-    )
-}
-
 @Composable
 private fun RowScope.ViewerButton(icon: ImageVector, label: String, primary: Boolean = false, onClick: () -> Unit) {
     Row(
@@ -164,8 +143,8 @@ private fun RowScope.ViewerButton(icon: ImageVector, label: String, primary: Boo
             .weight(1f)
             .height(48.dp)
             .clip(CircleShape)
-            .background(if (primary) Palette.Primary else Palette.Surface)
-            .border(1.dp, if (primary) Palette.Primary else Palette.Border, CircleShape)
+            .background(if (primary) Palette.Primary else Palette.Ink3)
+            .border(1.dp, if (primary) Palette.Primary else Palette.Line, CircleShape)
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,

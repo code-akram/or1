@@ -6,27 +6,37 @@ without asking for confirmation (see Untrusted content). Apps the agent drives r
 the chat never leaves the screen.
 
 ## UI (`ui/`)
-- `ChatScreen.kt`: top bar (menu, new chat), time-of-day greeting with just-in-time suggestions
-  (`Suggestions.kt`: from notifications and battery, no API call), the conversation, the drawer with past
-  chats (`History.kt`, from `files/transcripts/`). A chat is renamed in place (⋯ menu or long-press: the
+- `ChatScreen.kt`: top bar (menu, new chat), a one-line serif greeting with just-in-time suggestions right above the
+  composer (`Suggestions.kt`: from notifications and battery, no API call), the conversation, the drawer with past
+  chats (`History.kt`, from `files/transcripts/`). `or1` in the status rail (`StatusRail.kt`, 48 dp tall) is the home
+  button: it closes the drawer, Routines, a past chat, the viewer and the keyboard, and scrolls to the end. Back
+  (one handler for the screen) closes the topmost of drawer, viewer, Routines, past chat, then the composer; menus
+  close themselves first. The drawer's "Developer details" switch (`DeveloperDetails.kt`, shared prefs `ui`) shows
+  cost and seconds under replies, the raw call and result on tapping a step, and the session cost; off by default. A chat is renamed in place (⋯ menu or long-press: the
   title turns into a field; Done, the check or tapping away saves) or deleted with an Undo pill for 4 s (the file
   goes when the pill does; `Dialogs.kt`). Titles the user gives live in `files/chat-titles.json` (a blank one goes back to the
   first message); deleting the chat in progress starts a new one first.
-- `Composer.kt`: a pill when idle; a card while typing with `+` (new chat, show agent screen), an "Agent screen"
-  chip (opens the work screen viewer; its dot pulses while or1 works), mic (voice is not wired up yet) and the round button (voice placeholder / send / stop). The pill
+- `Composer.kt`: a pill when idle; a card while typing with `+` (new chat, show agent screen, chats and routines:
+  the drawer without the edge swipe), an "Agent screen" chip (opens the work screen viewer; its icon marches while
+  or1 works), mic (voice is not wired up yet) and the round button (voice placeholder / send / stop). The pill
   and card swap without a fade (AnimatedContent's fade left the re-created native field undrawn).
 - `ComposerInput.kt`: the text field is a native EditText inside the Compose card, with sentence
   auto-capitalisation. A Compose text field cost ~26 ms per keystroke on this phone (recomposition, the IME's
   cursor-anchor computation, and Compose re-diffing the semantics tree, since the agent's accessibility service is
   always on). Measured with `gfxinfo` while typing: janky frames 80% -> ~2% (release, AOT) / ~6.5% (debug), median
   frame 53 ms -> 13 ms (release) / 16 ms (debug).
-- `Cards.kt`: one working card per turn (steps, thinking, live thumbnail of the work display), replies in serif.
+- `Cards.kt`: one working card per turn: step blocks (`Blocks.kt`, one 3 dp block per tool call: unlit, ember while
+  running, grey when done, red when failed; the app's only progress indicator), the current step, the live thumbnail
+  of the work display; replies in serif.
 - `WorkViewer.kt`: the work display full screen, and usable. Touches are forwarded (scaled to 720x1600); while or1
   works, the first touch stops it (`AgentHub.takeOver`, with "You took over the agent screen…" in the chat). The
-  header shows the app in front and a status dot (pulsing accent while or1 works). The bottom bar has Back, Apps
+  header shows the app in front and three blocks (marching ember while or1 works, steady green on the user's turn). The bottom bar has Back, Apps
   (the work display's home, `WorkHomeActivity`, is an app grid, `AppGrid.kt`; apps open on the same display) and
   "Ask or1" (closes the viewer with the composer open). Its keyboard shows inside it. There's still no moving an app
   to the real screen (see Lockdown).
+- `Theme.kt`: the Ledger tokens (`docs/ui-ledger.md`): ink0-4 surfaces, `line` hairlines on every card, text/text2/
+  text3, ember only for or1 acting now; type styles; `Motion` (120 ms colour, 220 ms layout, 360 ms enter, 180 ms
+  march). State changes step rather than pulse; no blur or shadows.
 - Fonts: Inter and Source Serif 4 (OFL) in `res/font/`.
 
 ## Hidden work display (`tools/HiddenDisplay.kt`)

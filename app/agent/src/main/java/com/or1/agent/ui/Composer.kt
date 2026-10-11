@@ -2,6 +2,7 @@ package com.or1.agent.ui
 
 import android.os.SystemClock
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,7 +22,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -38,7 +38,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -92,8 +91,8 @@ fun Composer(
                     .fillMaxWidth()
                     .height(60.dp)
                     .clip(CircleShape)
-                    .background(Palette.Surface)
-                    .border(1.dp, Palette.Border, CircleShape)
+                    .background(Palette.Ink3)
+                    .border(1.dp, Palette.Line, CircleShape)
                     .clickable { onExpand(true) }
                     .padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -101,11 +100,11 @@ fun Composer(
                 PlusButton(onPlusAction, background = Color.Transparent)
                 Text(
                     "Ask or1…",
-                    style = Type.Input.copy(color = Palette.Placeholder),
+                    style = Type.Body.copy(color = Palette.Text2),
                     maxLines = 1,
                     modifier = Modifier.weight(1f).padding(horizontal = 6.dp),
                 )
-                IconCircle(Icons.Mic, "Voice input", onMic, tint = Palette.TextDim, background = Color.Transparent)
+                IconCircle(Icons.Mic, "Voice input", onMic, tint = Palette.Text2, background = Color.Transparent)
                 Spacer(Modifier.width(4.dp))
                 PrimaryButton(action, onPrimary)
             }
@@ -159,8 +158,8 @@ private fun ComposerCard(
         Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(Palette.Surface)
-            .border(1.dp, Palette.Border, shape)
+            .background(Palette.Ink3)
+            .border(1.dp, Palette.Line, shape)
             .padding(start = 8.dp, end = 8.dp, top = 14.dp, bottom = 8.dp),
     ) {
         AndroidView(
@@ -169,57 +168,66 @@ private fun ComposerCard(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).heightIn(min = 28.dp),
         )
         Spacer(Modifier.height(14.dp))
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PlusButton(onPlusAction, background = Palette.SurfaceHigh)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            PlusButton(onPlusAction, background = Palette.Ink4)
             AgentScreenChip(busy) { onPlusAction(PlusAction.WORK_SCREEN) }
             Spacer(Modifier.weight(1f))
-            IconCircle(Icons.Mic, "Voice input", onMic, tint = Palette.TextDim, background = Palette.SurfaceHigh)
+            IconCircle(Icons.Mic, "Voice input", onMic, tint = Palette.Text2, background = Palette.Ink4)
             PrimaryButton(action, onPrimary)
         }
     }
 }
 
-enum class PlusAction { NEW_CHAT, WORK_SCREEN }
+enum class PlusAction { NEW_CHAT, WORK_SCREEN, DRAWER }
 
 @Composable
 private fun PlusButton(onAction: (PlusAction) -> Unit, background: Color) {
     var open by remember { mutableStateOf(false) }
     Box {
         IconCircle(Icons.Plus, "More", { open = true }, tint = Palette.Text, background = background)
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = Palette.SurfaceHigh) {
+        DropdownMenu(
+            expanded = open, onDismissRequest = { open = false },
+            shape = RoundedCornerShape(14.dp), containerColor = Palette.Ink4,
+            tonalElevation = 0.dp, shadowElevation = 0.dp, border = BorderStroke(1.dp, Palette.Line),
+        ) {
             DropdownMenuItem(
                 text = { Text("New chat", style = Type.Body) },
-                leadingIcon = { Icon(Icons.NewChat, null, tint = Palette.TextDim, modifier = Modifier.size(20.dp)) },
+                leadingIcon = { Icon(Icons.NewChat, null, tint = Palette.Text2, modifier = Modifier.size(20.dp)) },
                 onClick = { open = false; onAction(PlusAction.NEW_CHAT) },
             )
             DropdownMenuItem(
                 text = { Text("Show agent screen", style = Type.Body) },
-                leadingIcon = { Icon(Icons.Screen, null, tint = Palette.TextDim, modifier = Modifier.size(20.dp)) },
+                leadingIcon = { Icon(Icons.Screen, null, tint = Palette.Text2, modifier = Modifier.size(20.dp)) },
                 onClick = { open = false; onAction(PlusAction.WORK_SCREEN) },
+            )
+            // The drawer's edge swipe is unreliable on this digitiser; this is the other way in.
+            DropdownMenuItem(
+                text = { Text("Chats and routines", style = Type.Body) },
+                leadingIcon = { Icon(Icons.Menu, null, tint = Palette.Text2, modifier = Modifier.size(20.dp)) },
+                onClick = { open = false; onAction(PlusAction.DRAWER) },
             )
         }
     }
 }
 
-/** Opens the agent's work screen; its dot pulses while or1 is working there. */
+/** Opens the agent's work screen; its icon becomes the march while or1 is working there. */
 @Composable
 private fun AgentScreenChip(busy: Boolean, onClick: () -> Unit) {
     Row(
         Modifier
-            .height(44.dp)
+            .height(48.dp)
             .clip(CircleShape)
-            .background(Palette.SurfaceHigh)
+            .background(Palette.Ink4)
             .clickable(onClickLabel = "Show agent screen", onClick = onClick)
-            .padding(start = 14.dp, end = 16.dp),
+            .padding(start = 12.dp, end = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Screen, null, tint = Palette.TextDim, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(8.dp))
-        Text("Agent screen", style = Type.Chip)
-        if (busy) {
-            Spacer(Modifier.width(8.dp))
-            StatusDot(working = true)
+        // The same slot either way, so the row doesn't shift when or1 starts.
+        Box(Modifier.size(18.dp), contentAlignment = Alignment.Center) {
+            if (busy) March() else Icon(Icons.Screen, null, tint = Palette.Text2, modifier = Modifier.size(18.dp))
         }
+        Spacer(Modifier.width(8.dp))
+        Text("Agent screen", style = Type.Step.copy(color = Palette.Text), maxLines = 1)
     }
 }
 
@@ -234,7 +242,7 @@ private fun PrimaryButton(action: PrimaryAction, onClick: () -> Unit) {
 }
 
 @Composable
-fun IconCircle(icon: ImageVector, label: String, onClick: () -> Unit, tint: Color, background: Color, size: Int = 44) {
+fun IconCircle(icon: ImageVector, label: String, onClick: () -> Unit, tint: Color, background: Color, size: Int = 48) {
     Box(
         Modifier.size(size.dp).clip(CircleShape).background(background).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,

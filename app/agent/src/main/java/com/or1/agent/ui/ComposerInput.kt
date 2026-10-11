@@ -68,13 +68,13 @@ class ComposerInput {
             setPadding(0, 0, 0, 0)
             hint = "Ask or1…"
             setTextColor(Palette.Text.toArgb())
-            setHintTextColor(Palette.Placeholder.toArgb())
-            highlightColor = Palette.Accent.copy(alpha = 0.35f).toArgb()
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+            setHintTextColor(Palette.Text2.toArgb())
+            highlightColor = Palette.EmberDim.toArgb()
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
             typeface = ResourcesCompat.getFont(context, R.font.inter_regular)
-            lineHeight = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 24f, resources.displayMetrics).toInt()
+            lineHeight = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 23f, resources.displayMetrics).toInt()
             textCursorDrawable = GradientDrawable().apply {
-                setColor(Palette.Accent.toArgb())
+                setColor(Palette.Ember.toArgb())
                 setSize((2 * density).toInt(), 0)
             }
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or

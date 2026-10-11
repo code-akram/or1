@@ -3,11 +3,6 @@ package com.or1.agent.ui
 import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -27,9 +22,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,7 +34,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -48,6 +42,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -105,7 +100,7 @@ fun UserBubble(item: ChatItem.User) {
             modifier = Modifier
                 .widthIn(max = 300.dp)
                 .clip(RoundedCornerShape(22.dp))
-                .background(Palette.SurfaceHigh)
+                .background(Palette.Ink4)
                 .padding(horizontal = 16.dp, vertical = 11.dp),
         )
     }
@@ -130,16 +125,16 @@ fun ReplyBlock(item: ChatItem.Reply) {
                         .padding(vertical = 6.dp)
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
-                        .background(Palette.SurfaceSunken)
+                        .background(Palette.Ink1)
                         .padding(12.dp),
                 )
             } else if (block.text.isNotBlank()) {
                 Text(inline(block.text), style = Type.Reply, modifier = Modifier.padding(vertical = 2.dp))
             }
         }
-        if (item.cost > 0 || item.seconds > 0) {
+        if (DeveloperDetails.on && (item.cost > 0 || item.seconds > 0)) {
             Spacer(Modifier.height(6.dp))
-            Text("$%.4f · %.1f s".format(item.cost, item.seconds), style = Type.Caption)
+            Text("$%.4f · %.1f s".format(item.cost, item.seconds), style = Type.Caption.copy(fontFeatureSettings = "tnum"))
         }
     }
 }
@@ -160,15 +155,16 @@ private fun inline(text: String): AnnotatedString = buildAnnotatedString {
         append(text.substring(last, m.range.first))
         val bold = m.groups[1]?.value
         if (bold != null) withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(bold) }
-        else withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = Palette.SurfaceSunken)) { append(m.groups[2]!!.value) }
+        else withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = Palette.Ink1)) { append(m.groups[2]!!.value) }
         last = m.range.last + 1
     }
     append(text.substring(last))
 }
 
 /**
- * One card per turn for the agent's work: a header ("Working…" / "3 steps"), the latest step, and the live
- * thumbnail of the hidden work screen. Expands to every step; tapping a step shows the raw call and result.
+ * One card per turn for the agent's work: step blocks (one per tool call), the current step (or "3 steps" once done)
+ * and the live thumbnail of the hidden work screen. Expands to every step; with developer details on, tapping a step
+ * shows the raw call and result.
  */
 @Composable
 fun WorkCard(turn: Turn, active: Boolean, preview: Bitmap?, onOpenPreview: () -> Unit) {
@@ -176,44 +172,46 @@ fun WorkCard(turn: Turn, active: Boolean, preview: Bitmap?, onOpenPreview: () ->
     val calls = turn.toolCalls
     val shape = RoundedCornerShape(20.dp)
     val showThumbnail = preview != null && turn.usedScreen
+    val blocks = calls.map { StepState.of(it, active) }.let { states ->
+        // While or1 thinks between calls, an unlit block stands for the step to come.
+        if (active && states.none { it == StepState.RUNNING }) states + StepState.UNLIT else states
+    }
+    val latest = calls.lastOrNull()?.label ?: (turn.steps.lastOrNull() as? ChatItem.Thinking)?.let { "Thinking" }
     // The text sets the card's height; the thumbnail fills it (cropped to the top of the work screen), so the
     // card stays as compact as its content.
     Box(
         Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(Palette.Surface)
-            .border(1.dp, Palette.Border, shape)
-            .animateContentSize(tween(220))
-            .padding(14.dp),
+            .background(Palette.Ink2)
+            .border(1.dp, if (active) Palette.LineStrong else Palette.Line, shape)
+            .animateContentSize(Motion.layout())
+            .padding(horizontal = 14.dp, vertical = 6.dp),
     ) {
         Column(Modifier.fillMaxWidth().padding(end = if (showThumbnail) 62.dp else 0.dp)) {
             Row(
-                Modifier.fillMaxWidth().clickable { expanded = !expanded },
+                Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { expanded = !expanded },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                StepBlocks(blocks)
+                Spacer(Modifier.width(12.dp))
                 if (active) {
-                    CircularProgressIndicator(Modifier.size(16.dp), color = Palette.Accent, strokeWidth = 2.dp)
+                    // The current step itself, steady: the blocks and the rail show that it's moving.
+                    Text(latest ?: "Working", style = Type.Step.copy(color = Palette.Text), maxLines = 2, modifier = Modifier.weight(1f))
                 } else {
-                    Icon(Icons.Check, null, tint = Palette.TextDim, modifier = Modifier.size(16.dp))
+                    val count = if (calls.size == 1) "1 step" else "${calls.size} steps"
+                    Text(count, style = Type.Label, modifier = Modifier.weight(1f))
                 }
-                Spacer(Modifier.width(10.dp))
-                val count = if (calls.size == 1) "1 step" else "${calls.size} steps"
-                Text(if (active) "Working…" else count, style = Type.Label, modifier = Modifier.weight(1f))
-                Icon(if (expanded) Icons.ExpandLess else Icons.ExpandMore, null, tint = Palette.TextFaint, modifier = Modifier.size(20.dp))
+                Icon(if (expanded) Icons.ExpandLess else Icons.ExpandMore, null, tint = Palette.Text3, modifier = Modifier.size(20.dp))
             }
-            if (!expanded) {
-                val latest = calls.lastOrNull()?.label ?: (turn.steps.lastOrNull() as? ChatItem.Thinking)?.let { "Thinking" }
-                if (latest != null) {
-                    Spacer(Modifier.height(6.dp))
-                    Text(latest, style = Type.Step, maxLines = 2, modifier = Modifier.padding(start = 26.dp).let { if (active) it.pulse() else it })
-                }
+            if (!expanded && !active && latest != null) {
+                Text(latest, style = Type.Step, maxLines = 2, modifier = Modifier.padding(bottom = 8.dp))
             }
-            AnimatedVisibility(expanded) {
-                Column(Modifier.padding(start = 26.dp, top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            AnimatedVisibility(expanded, enter = Motion.expand, exit = Motion.collapse) {
+                Column(Modifier.padding(bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     for (step in turn.steps) when (step) {
-                        is ChatItem.Thinking -> Text(step.text, style = Type.Thinking, maxLines = 6)
-                        is ChatItem.ToolCall -> StepRow(step)
+                        is ChatItem.Thinking -> Text(step.text, style = Type.Step.copy(fontStyle = FontStyle.Italic, color = Palette.Text3), maxLines = 6)
+                        is ChatItem.ToolCall -> StepRow(step, active)
                         else -> {}
                     }
                 }
@@ -222,7 +220,7 @@ fun WorkCard(turn: Turn, active: Boolean, preview: Bitmap?, onOpenPreview: () ->
         if (showThumbnail) {
             Box(Modifier.matchParentSize(), contentAlignment = Alignment.TopEnd) {
                 Image(
-                    preview!!.asImageBitmap(),
+                    preview.asImageBitmap(),
                     contentDescription = "Agent screen. Tap to view.",
                     contentScale = ContentScale.Crop,
                     alignment = Alignment.TopCenter,
@@ -231,7 +229,7 @@ fun WorkCard(turn: Turn, active: Boolean, preview: Bitmap?, onOpenPreview: () ->
                         .heightIn(min = 48.dp, max = 111.dp)
                         .fillMaxHeight()
                         .clip(RoundedCornerShape(10.dp))
-                        .border(1.dp, Palette.Border, RoundedCornerShape(10.dp))
+                        .border(1.dp, Palette.Line, RoundedCornerShape(10.dp))
                         .clickable(onClick = onOpenPreview),
                 )
             }
@@ -239,49 +237,30 @@ fun WorkCard(turn: Turn, active: Boolean, preview: Bitmap?, onOpenPreview: () ->
     }
 }
 
+/** A step's label after its block; the raw call and result are a developer detail. */
 @Composable
-private fun StepRow(step: ChatItem.ToolCall) {
+private fun StepRow(step: ChatItem.ToolCall, active: Boolean) {
     var open by rememberSaveable(step.id) { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().clickable { open = !open }) {
+    val details = DeveloperDetails.on
+    Column(Modifier.fillMaxWidth().then(if (details) Modifier.heightIn(min = 48.dp).clickable { open = !open } else Modifier)) {
         Row(verticalAlignment = Alignment.Top) {
-            Box(
-                Modifier
-                    .padding(top = 7.dp)
-                    .size(6.dp)
-                    .clip(CircleShape)
-                    .background(
-                        when {
-                            step.isError -> Palette.Error
-                            step.result == null -> Palette.Accent
-                            else -> Palette.TextFaint
-                        }
-                    ),
-            )
+            StepBlocks(listOf(StepState.of(step, active)), Modifier.padding(top = 9.dp))
             Spacer(Modifier.width(10.dp))
             Text(step.label, style = Type.Step)
         }
-        AnimatedVisibility(open) {
+        AnimatedVisibility(details && open, enter = Motion.expand, exit = Motion.collapse) {
             Text(
                 step.detail + (step.result?.let { "\n\n" + it.take(1200) } ?: ""),
                 style = Type.Mono,
                 modifier = Modifier
-                    .padding(start = 16.dp, top = 6.dp)
+                    .padding(start = 13.dp, top = 6.dp)
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(10.dp))
-                    .background(Palette.SurfaceSunken)
+                    .background(Palette.Ink1)
                     .padding(10.dp),
             )
         }
     }
-}
-
-@Composable
-private fun Modifier.pulse(): Modifier {
-    val alpha by rememberInfiniteTransition(label = "pulse").animateFloat(
-        initialValue = 1f, targetValue = 0.45f,
-        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "alpha",
-    )
-    return alpha(alpha)
 }
 
 @Composable
@@ -290,10 +269,12 @@ fun PillButton(text: String, background: androidx.compose.ui.graphics.Color, col
         text,
         style = Type.Label.copy(color = color),
         modifier = Modifier
+            .heightIn(min = 48.dp)
             .clip(CircleShape)
             .background(background)
             .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 11.dp),
+            .wrapContentHeight()
+            .padding(horizontal = 20.dp),
     )
 }
 

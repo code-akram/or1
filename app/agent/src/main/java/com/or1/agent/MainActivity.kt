@@ -10,6 +10,7 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import com.or1.agent.ui.ChatScreen
+import com.or1.agent.ui.DeveloperDetails
 
 /** The phone's home screen: the chat composer. */
 class MainActivity : ComponentActivity() {
@@ -20,6 +21,7 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
         )
         AgentHub.init(applicationContext)
+        DeveloperDetails.load(applicationContext)
         startForegroundService(Intent(this, AgentService::class.java))
         setContent { ChatScreen() }
         handle(intent)

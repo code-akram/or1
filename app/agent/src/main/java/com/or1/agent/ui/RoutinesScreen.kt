@@ -1,6 +1,5 @@
 package com.or1.agent.ui
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -14,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
@@ -51,7 +51,6 @@ import org.json.JSONObject
  */
 @Composable
 fun RoutinesView(onClose: () -> Unit, onOpenPreview: () -> Unit) {
-    BackHandler(onBack = onClose)
     val routines by Routines.list.collectAsState()
     val items by AgentHub.routineItems.collectAsState()
     val busy by AgentHub.routineBusy.collectAsState()
@@ -67,9 +66,9 @@ fun RoutinesView(onClose: () -> Unit, onOpenPreview: () -> Unit) {
     LaunchedEffect(items.size, items.lastOrNull()) {
         if (turns.isNotEmpty()) list.animateScrollToItem(list.layoutInfo.totalItemsCount - 1, scrollOffset = Int.MAX_VALUE / 2)
     }
-    Column(Modifier.fillMaxSize().background(Palette.Background).systemBarsPadding()) {
+    Column(Modifier.fillMaxSize().background(Palette.Ink0).systemBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconCircle(Icons.Back, "Back", onClose, tint = Palette.Text, background = Palette.Surface)
+            IconCircle(Icons.Back, "Back", onClose, tint = Palette.Text, background = Palette.Ink3)
             Spacer(Modifier.width(12.dp))
             Text("Routines", style = Type.Label)
         }
@@ -95,7 +94,7 @@ fun RoutinesView(onClose: () -> Unit, onOpenPreview: () -> Unit) {
                     renaming -> InlineRename(
                         initial = routine.name.orEmpty(), placeholder = routine.describe(), style = Type.Label,
                         onDone = { Routines.rename(routine.id, it); renaming = null },
-                        modifier = Modifier.fillMaxWidth().animateItem(),
+                        modifier = Modifier.fillMaxWidth().itemMotion(this),
                     )
                     else -> RoutineRow(
                         routine,
@@ -105,7 +104,7 @@ fun RoutinesView(onClose: () -> Unit, onOpenPreview: () -> Unit) {
                             pending?.commit?.invoke()
                             pending = PendingDelete(routine.id, "Routine deleted") { Routines.remove(routine.id) }
                         },
-                        modifier = Modifier.animateItem(),
+                        modifier = Modifier.itemMotion(this),
                     )
                 }
             }
@@ -119,7 +118,7 @@ fun RoutinesView(onClose: () -> Unit, onOpenPreview: () -> Unit) {
                         val user = turn.user
                         val reply = turn.reply
                         if (user != null && reply != null && !active && !chatBusy) {
-                            PillButton("Continue in chat", Palette.Surface, Palette.Text) {
+                            PillButton("Continue in chat", Palette.Ink4, Palette.Text) {
                                 AgentHub.continueInChat(user.text, user.source, reply.text)
                                 onClose()
                             }
@@ -141,7 +140,8 @@ fun RoutinesView(onClose: () -> Unit, onOpenPreview: () -> Unit) {
 @Composable
 private fun RoutineRow(routine: Routine, onEdit: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit, modifier: Modifier = Modifier) {
     Row(
-        modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Palette.Surface).clickable(onClick = onEdit)
+        modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Palette.Ink2)
+            .border(1.dp, Palette.Line, RoundedCornerShape(16.dp)).clickable(onClick = onEdit)
             .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -173,8 +173,8 @@ private fun RoutineEditor(routine: Routine, onDone: () -> Unit) {
     var contains by remember { mutableStateOf(routine.textContains.orEmpty()) }
     var error by remember { mutableStateOf<String?>(null) }
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Palette.Surface)
-            .border(1.dp, Palette.Border, RoundedCornerShape(16.dp)).padding(16.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Palette.Ink2)
+            .border(1.dp, Palette.LineStrong, RoundedCornerShape(16.dp)).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Field("Name (optional)", name, { name = it })
@@ -187,18 +187,19 @@ private fun RoutineEditor(routine: Routine, onDone: () -> Unit) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (option in listOf("once", "daily", "weekdays", "weekly")) {
                     val selected = option == repeat
-                    Text(
-                        option,
-                        style = Type.Chip.copy(color = if (selected) Palette.OnPrimary else Palette.Text),
-                        modifier = Modifier.clip(CircleShape).background(if (selected) Palette.Primary else Palette.SurfaceHigh)
-                            .clickable { repeat = option }.padding(horizontal = 14.dp, vertical = 8.dp),
-                    )
+                    Box(
+                        Modifier.heightIn(min = 48.dp).clip(CircleShape).background(if (selected) Palette.Primary else Palette.Ink4)
+                            .clickable { repeat = option }.padding(horizontal = 16.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(option, style = Type.Step.copy(color = if (selected) Palette.OnPrimary else Palette.Text))
+                    }
                 }
             }
         }
         error?.let { Text(it, style = Type.Caption.copy(color = Palette.Error)) }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.align(Alignment.End)) {
-            PillButton("Cancel", Palette.Surface, Palette.TextDim, onDone)
+            PillButton("Cancel", Palette.Ink4, Palette.Text2, onDone)
             PillButton("Save", Palette.Primary, Palette.OnPrimary) {
                 val args = JSONObject().put("prompt", prompt.trim()).put("name", name.trim())
                 if (routine.onNotification) {
@@ -228,8 +229,8 @@ private fun Field(label: String, value: String, onValue: (String) -> Unit, singl
         textStyle = Type.Body,
         modifier = Modifier.fillMaxWidth(),
         colors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = Palette.TextDim, unfocusedBorderColor = Palette.Border,
-            focusedLabelColor = Palette.TextDim, unfocusedLabelColor = Palette.TextFaint, cursorColor = Palette.Text,
+            focusedBorderColor = Palette.Text2, unfocusedBorderColor = Palette.Line,
+            focusedLabelColor = Palette.Text2, unfocusedLabelColor = Palette.Text3, cursorColor = Palette.Text,
         ),
     )
 }

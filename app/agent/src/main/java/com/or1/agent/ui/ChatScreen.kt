@@ -1,10 +1,12 @@
 package com.or1.agent.ui
 
 import android.os.SystemClock
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,6 +20,7 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.offset
@@ -31,10 +34,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -53,11 +59,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalWindowInfo
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.or1.agent.AgentHub
@@ -69,10 +81,14 @@ import java.util.Calendar
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/** The phone's home screen: greeting and suggestions when empty, the conversation otherwise, and the composer. */
+/**
+ * The phone's home screen: the conversation (or a one-line greeting and suggestions just above the composer), the
+ * composer, the drawer with past chats, and the screens that open over them. `or1` in the rail goes home from
+ * anywhere; Back closes the topmost layer. [nowStrip] sits under the top bar, above the stream.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun ChatScreen() {
+fun ChatScreen(nowStrip: @Composable () -> Unit = {}) {
     Or1Theme {
         val context = LocalContext.current
         val items by AgentHub.items.collectAsState()
@@ -91,6 +107,8 @@ fun ChatScreen() {
         var viewerOpen by remember { mutableStateOf(false) }
         var pastChat by remember { mutableStateOf<PastChat?>(null) }
         var routinesOpen by remember { mutableStateOf(false) }
+        // Bumped by the home button: the conversation scrolls to its end.
+        var homeTaps by remember { mutableIntStateOf(0) }
         LaunchedEffect(showRoutines) {
             if (showRoutines) {
                 routinesOpen = true
@@ -101,6 +119,8 @@ fun ChatScreen() {
         LaunchedEffect(viewerOpen) { if (viewerOpen) input.dismiss() }
         val drawer = rememberDrawerState(DrawerValue.Closed)
         val scope = rememberCoroutineScope()
+        val focus = LocalFocusManager.current
+        val keyboard = LocalSoftwareKeyboardController.current
 
         val suggestions = remember(notificationTick, items.isEmpty()) { Suggestions.build(context) }
 
@@ -142,12 +162,44 @@ fun ChatScreen() {
             input.dismiss()
         }
 
+        fun closeComposer() {
+            input.dismiss()
+            if (!input.hasText) expanded = false
+        }
+
+        // Everything that can be open over the idle chat closes; typed text stays in the composer.
+        fun goHome() {
+            scope.launch { drawer.close() }
+            viewerOpen = false
+            routinesOpen = false
+            pastChat = null
+            focus.clearFocus(force = true)
+            keyboard?.hide()
+            closeComposer()
+            homeTaps++
+        }
+
+        // One handler for the whole screen, so the order doesn't depend on which screen registered last. Menus are
+        // popups and close themselves first. Always enabled: Back at home stays home (this is the HOME app).
+        BackHandler {
+            when {
+                // Drawn over everything below.
+                drawer.isOpen -> scope.launch { drawer.close() }
+                viewerOpen -> viewerOpen = false
+                routinesOpen -> routinesOpen = false
+                pastChat != null -> pastChat = null
+                else -> closeComposer()
+            }
+        }
+
         // The rail first, below the status bar and the notch; every screen and the drawer below it.
-        Column(Modifier.fillMaxSize().background(Palette.Background)) {
-            StatusRail(busy)
+        Column(Modifier.fillMaxSize().background(Palette.Ink0)) {
+            StatusRail(busy, onHome = ::goHome)
             Box(Modifier.weight(1f).consumeWindowInsets(WindowInsets.statusBars)) {
                 ModalNavigationDrawer(
                     drawerState = drawer,
+                    // An edge swipe in the viewer belongs to the app on the work screen.
+                    gesturesEnabled = !viewerOpen,
                     drawerContent = {
                         Drawer(
                             totalCost = totalCost,
@@ -159,13 +211,10 @@ fun ChatScreen() {
                         )
                     },
                 ) {
-                    Box(Modifier.fillMaxSize().background(Palette.Background)) {
+                    Box(Modifier.fillMaxSize().background(Palette.Ink0)) {
                         Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
                             TopBar(
-                                onBlankTap = {
-                                    input.dismiss()
-                                    if (!input.hasText) expanded = false
-                                },
+                                onBlankTap = ::closeComposer,
                                 showDot = suggestions.any { it.appIcon != null },
                                 showNewChat = items.isNotEmpty(),
                                 onMenu = { scope.launch { drawer.open() } },
@@ -174,22 +223,21 @@ fun ChatScreen() {
                             for (alert in alerts) {
                                 AlertBanner(alert, onOpen = { routinesOpen = true }, onDismiss = { AgentHub.dismissAlert(alert.id) })
                             }
+                            nowStrip()
                             // Tapping empty space closes the keyboard: with the system UI locked down there's no back button.
                             Box(
                                 Modifier.weight(1f).fillMaxWidth().clickable(
                                     interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
                                     indication = null,
-                                ) {
-                                    input.dismiss()
-                                    if (!input.hasText) expanded = false
-                                },
+                                    onClick = ::closeComposer,
+                                ),
                             ) {
                                 if (items.isEmpty()) {
                                     EmptyState(suggestions, onSuggestion = { send(it.prompt) })
                                 } else {
                                     // A list per conversation: the old turns' exit animations otherwise get stuck when the
                                     // items are replaced in one go (a fresh conversation), leaving them drawn under the new one.
-                                    key(conversation) { Conversation(items, busy, preview, onOpenPreview = { viewerOpen = true }) }
+                                    key(conversation) { Conversation(items, busy, preview, homeTaps, onOpenPreview = { viewerOpen = true }) }
                                 }
                             }
                             Composer(
@@ -203,6 +251,7 @@ fun ChatScreen() {
                                     when (it) {
                                         PlusAction.NEW_CHAT -> AgentHub.newConversation()
                                         PlusAction.WORK_SCREEN -> viewerOpen = true
+                                        PlusAction.DRAWER -> { closeComposer(); scope.launch { drawer.open() } }
                                     }
                                 },
                                 modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 10.dp),
@@ -227,7 +276,7 @@ fun ChatScreen() {
 @Composable
 private fun TopBar(onBlankTap: () -> Unit, showDot: Boolean, showNewChat: Boolean, onMenu: () -> Unit, onNewChat: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().height(60.dp)
+        Modifier.fillMaxWidth().height(48.dp)
             .clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null, onClick = onBlankTap)
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -237,7 +286,7 @@ private fun TopBar(onBlankTap: () -> Unit, showDot: Boolean, showNewChat: Boolea
             if (showDot) {
                 Box(
                     Modifier.align(Alignment.TopEnd).offset(x = (-8).dp, y = 9.dp).size(8.dp)
-                        .clip(CircleShape).background(Palette.Accent),
+                        .clip(CircleShape).background(Palette.Ember),
                 )
             }
         }
@@ -254,26 +303,26 @@ private fun AlertBanner(alert: com.or1.agent.Alert, onOpen: () -> Unit, onDismis
             .padding(horizontal = 12.dp, vertical = 4.dp)
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(Palette.Surface)
+            .background(Palette.Ink2)
+            .border(1.dp, Palette.Line, RoundedCornerShape(16.dp))
             .clickable(onClick = onOpen)
-            .padding(start = 14.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
+            .padding(start = 14.dp, end = 0.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(Icons.Routine, null, tint = Palette.Text, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(10.dp))
         // Two lines: the full text is on the Routines screen, a tap away.
         Text(alert.text, style = Type.Step.copy(color = Palette.Text), maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        IconCircle(Icons.Close, "Dismiss", onDismiss, tint = Palette.TextDim, background = Color.Transparent, size = 36)
+        IconCircle(Icons.Close, "Dismiss", onDismiss, tint = Palette.Text2, background = Color.Transparent)
     }
 }
 
 @Composable
 private fun EmptyState(suggestions: List<Suggestion>, onSuggestion: (Suggestion) -> Unit) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Spacer(Modifier.weight(1f))
-        Text(greeting(), style = Type.Greeting, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-        Spacer(Modifier.weight(1.3f))
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(bottom = 10.dp)) {
+        Text(greeting(), style = Type.CaptionSerif, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 8.dp, bottom = 4.dp))
+        Column(Modifier.padding(bottom = 4.dp)) {
             for (s in suggestions) SuggestionRow(s) { onSuggestion(s) }
         }
     }
@@ -284,19 +333,20 @@ private fun SuggestionRow(s: Suggestion, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
+            .heightIn(min = 52.dp)
             .clip(RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 12.dp),
+            .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(28.dp), contentAlignment = Alignment.Center) {
             when {
                 s.appIcon != null -> Image(s.appIcon, null, Modifier.size(26.dp))
-                s.glyph != null -> Icon(s.glyph, null, tint = Palette.TextDim, modifier = Modifier.size(22.dp))
+                s.glyph != null -> Icon(s.glyph, null, tint = Palette.Text2, modifier = Modifier.size(22.dp))
             }
         }
         Spacer(Modifier.width(16.dp))
-        Text(s.text, style = Type.Suggestion, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(s.text, style = Type.Body, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -310,11 +360,15 @@ private fun greeting(): String = when (Calendar.getInstance().get(Calendar.HOUR_
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Conversation(items: List<ChatItem>, busy: Boolean, preview: android.graphics.Bitmap?, onOpenPreview: () -> Unit) {
+private fun Conversation(items: List<ChatItem>, busy: Boolean, preview: android.graphics.Bitmap?, homeTaps: Int, onOpenPreview: () -> Unit) {
     val turns = remember(items) { groupTurns(items) }
     val list = rememberLazyListState()
     LaunchedEffect(items.size, items.lastOrNull()) {
         if (turns.isNotEmpty()) list.animateScrollToItem(turns.lastIndex, scrollOffset = Int.MAX_VALUE / 2)
+    }
+    // A jump, not an animated scroll: it can be a long way.
+    LaunchedEffect(homeTaps) {
+        if (homeTaps > 0 && turns.isNotEmpty()) list.scrollToItem(turns.lastIndex, scrollOffset = Int.MAX_VALUE / 2)
     }
     LazyColumn(
         state = list,
@@ -324,7 +378,7 @@ private fun Conversation(items: List<ChatItem>, busy: Boolean, preview: android.
     ) {
         items(turns, key = { it.key }) { turn ->
             val last = turn === turns.last()
-            TurnView(turn, active = last && busy, preview = if (last) preview else null, onOpenPreview, Modifier.animateItem())
+            TurnView(turn, active = last && busy, preview = if (last) preview else null, onOpenPreview, Modifier.itemMotion(this))
         }
     }
 }
@@ -352,11 +406,20 @@ private fun Drawer(totalCost: Double, routineCount: Int, onNewChat: () -> Unit, 
     var renaming by remember { mutableStateOf<PastChat?>(null) }
     // Deleted from the list at once; the file goes when the Undo pill does.
     var pending by remember { mutableStateOf<PendingDelete?>(null) }
-    ModalDrawerSheet(drawerContainerColor = Palette.Background, drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp)) {
+    // Flat, on the window's black, with a hairline on its open edge.
+    ModalDrawerSheet(
+        drawerContainerColor = Palette.Ink0,
+        drawerShape = RectangleShape,
+        drawerTonalElevation = 0.dp,
+        modifier = Modifier.drawWithContent {
+            drawContent()
+            drawRect(Palette.Line, topLeft = Offset(size.width - 1.dp.toPx(), 0f), size = Size(1.dp.toPx(), size.height))
+        },
+    ) {
         Column(Modifier.fillMaxSize().systemBarsPadding().padding(horizontal = 12.dp)) {
             Wordmark(block = 5.dp, modifier = Modifier.padding(start = 12.dp, top = 20.dp, bottom = 20.dp))
             Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onNewChat).padding(12.dp),
+                Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(14.dp)).clickable(onClick = onNewChat).padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(Icons.NewChat, null, tint = Palette.Text, modifier = Modifier.size(20.dp))
@@ -364,7 +427,7 @@ private fun Drawer(totalCost: Double, routineCount: Int, onNewChat: () -> Unit, 
                 Text("New chat", style = Type.Body)
             }
             Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onRoutines).padding(12.dp),
+                Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(14.dp)).clickable(onClick = onRoutines).padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(Icons.Routine, null, tint = Palette.Text, modifier = Modifier.size(20.dp))
@@ -383,11 +446,11 @@ private fun Drawer(totalCost: Double, routineCount: Int, onNewChat: () -> Unit, 
                                 placeholder = chat.title,
                                 style = Type.Body,
                                 onDone = { History.rename(context, chat, it); renaming = null; version++ },
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp).animateItem(),
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp).itemMotion(this),
                             )
                         } else {
                             Row(
-                                Modifier.fillMaxWidth().animateItem().clip(RoundedCornerShape(14.dp))
+                                Modifier.fillMaxWidth().itemMotion(this).clip(RoundedCornerShape(14.dp))
                                     .combinedClickable(onClick = { onOpen(chat) }, onLongClick = { renaming = chat })
                                     .padding(start = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -417,12 +480,38 @@ private fun Drawer(totalCost: Double, routineCount: Int, onNewChat: () -> Unit, 
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
                 )
             }
-            Text(
-                "This session · $%.4f".format(totalCost),
-                style = Type.Caption,
-                modifier = Modifier.padding(12.dp),
-            )
+            DeveloperSwitch()
+            if (DeveloperDetails.on) {
+                Text(
+                    "This session · $%.4f".format(totalCost),
+                    style = Type.Caption.copy(fontFeatureSettings = "tnum"),
+                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                )
+            }
         }
+    }
+}
+
+/** Shows cost, seconds and raw tool calls (see [DeveloperDetails]). */
+@Composable
+private fun DeveloperSwitch() {
+    val context = LocalContext.current
+    val on = DeveloperDetails.on
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(14.dp))
+            .toggleable(value = on, role = Role.Switch, onValueChange = { DeveloperDetails.set(context, it) })
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Developer details", style = Type.Body, modifier = Modifier.weight(1f))
+        Switch(
+            checked = on,
+            onCheckedChange = null,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Palette.Ink0, checkedTrackColor = Palette.Text, checkedBorderColor = Palette.Text,
+                uncheckedThumbColor = Palette.Text3, uncheckedTrackColor = Palette.Ink2, uncheckedBorderColor = Palette.Line,
+            ),
+        )
     }
 }
 

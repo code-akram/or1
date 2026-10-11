@@ -5,15 +5,18 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -40,6 +43,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
@@ -56,16 +60,17 @@ class MenuAction(val label: String, val icon: ImageVector, val destructive: Bool
 fun RowMenu(actions: List<MenuAction>, label: String = "More") {
     var open by remember { mutableStateOf(false) }
     Box {
-        IconCircle(Icons.More, label, { open = true }, tint = Palette.TextFaint, background = Color.Transparent, size = 36)
+        IconCircle(Icons.More, label, { open = true }, tint = Palette.Text3, background = Color.Transparent)
         DropdownMenu(
             expanded = open, onDismissRequest = { open = false },
-            containerColor = Palette.SurfaceHigh, shape = RoundedCornerShape(14.dp),
+            shape = RoundedCornerShape(14.dp), containerColor = Palette.Ink4,
+            tonalElevation = 0.dp, shadowElevation = 0.dp, border = BorderStroke(1.dp, Palette.Line),
         ) {
             for (action in actions) {
                 val tint = if (action.destructive) Palette.Error else Palette.Text
                 DropdownMenuItem(
                     text = { Text(action.label, style = Type.Step.copy(color = tint)) },
-                    leadingIcon = { Icon(action.icon, null, tint = if (action.destructive) Palette.Error else Palette.TextDim, modifier = Modifier.size(18.dp)) },
+                    leadingIcon = { Icon(action.icon, null, tint = if (action.destructive) Palette.Error else Palette.Text2, modifier = Modifier.size(18.dp)) },
                     onClick = { open = false; action.onClick() },
                 )
             }
@@ -87,24 +92,24 @@ fun InlineRename(initial: String, placeholder: String, style: TextStyle, onDone:
     val finish = { if (!done) { done = true; onDone(value.text.trim()) } }
     LaunchedEffect(Unit) { focus.requestFocus() }
     Row(
-        modifier.clip(RoundedCornerShape(12.dp)).background(Palette.Surface).border(1.dp, Palette.Border, RoundedCornerShape(12.dp))
+        modifier.clip(RoundedCornerShape(12.dp)).background(Palette.Ink3).border(1.dp, Palette.Line, RoundedCornerShape(12.dp))
             .padding(start = 12.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.weight(1f).padding(vertical = 10.dp)) {
-            if (value.text.isEmpty()) Text(placeholder, style = style.copy(color = Palette.Placeholder), maxLines = 1)
+            if (value.text.isEmpty()) Text(placeholder, style = style.copy(color = Palette.Text2), maxLines = 1)
             BasicTextField(
                 value = value,
                 onValueChange = { value = it },
                 singleLine = true,
                 textStyle = style,
-                cursorBrush = SolidColor(Palette.Accent),
+                cursorBrush = SolidColor(Palette.Ember),
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { finish() }),
                 modifier = Modifier.focusRequester(focus).onFocusChanged { if (it.isFocused) hadFocus = true else if (hadFocus) finish() },
             )
         }
-        IconCircle(Icons.Check, "Save", { finish() }, tint = Palette.Text, background = Color.Transparent, size = 36)
+        IconCircle(Icons.Check, "Save", { finish() }, tint = Palette.Text, background = Color.Transparent)
     }
 }
 
@@ -122,21 +127,23 @@ fun UndoBar(pending: PendingDelete?, onUndo: () -> Unit, onExpired: () -> Unit, 
     }
     // Leaving the screen with a deletion pending carries it out.
     val current by rememberUpdatedState(pending)
+    val slide = with(LocalDensity.current) { Motion.ENTER_SLIDE.roundToPx() }
     DisposableEffect(Unit) { onDispose { current?.commit?.invoke() } }
     AnimatedVisibility(
         visible = pending != null, modifier = modifier,
-        enter = slideInVertically { it } + fadeIn(), exit = slideOutVertically { it } + fadeOut(),
+        enter = slideInVertically(Motion.enter()) { slide } + fadeIn(Motion.enter()),
+        exit = slideOutVertically(Motion.layout()) { slide } + fadeOut(Motion.fade()),
     ) {
         Row(
-            Modifier.clip(CircleShape).background(Palette.SurfaceHigh).border(1.dp, Palette.Border, CircleShape)
-                .padding(start = 18.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+            Modifier.clip(CircleShape).background(Palette.Ink4).border(1.dp, Palette.Line, CircleShape)
+                .padding(start = 18.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(pending?.text.orEmpty(), style = Type.Step.copy(color = Palette.Text), maxLines = 1)
             Spacer(Modifier.width(12.dp))
             Text(
-                "Undo", style = Type.Label.copy(color = Palette.Accent),
-                modifier = Modifier.clip(CircleShape).clickable(onClick = onUndo).padding(horizontal = 12.dp, vertical = 8.dp),
+                "Undo", style = Type.Label.copy(color = Palette.Ember),
+                modifier = Modifier.heightIn(min = 48.dp).clip(CircleShape).clickable(onClick = onUndo).wrapContentHeight().padding(horizontal = 14.dp),
             )
         }
     }

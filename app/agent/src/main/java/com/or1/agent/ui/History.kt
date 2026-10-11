@@ -1,7 +1,6 @@
 package com.or1.agent.ui
 
 import android.content.Context
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -93,11 +92,10 @@ object History {
 
 @Composable
 fun HistoryView(chat: PastChat, onClose: () -> Unit) {
-    BackHandler(onBack = onClose)
     val items = remember(chat) { History.load(chat) }
-    Column(Modifier.fillMaxSize().background(Palette.Background).systemBarsPadding()) {
+    Column(Modifier.fillMaxSize().background(Palette.Ink0).systemBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconCircle(Icons.Back, "Back", onClose, tint = Palette.Text, background = Palette.Surface)
+            IconCircle(Icons.Back, "Back", onClose, tint = Palette.Text, background = Palette.Ink3)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(chat.title, style = Type.Label, maxLines = 1, overflow = TextOverflow.Ellipsis)
