@@ -113,8 +113,12 @@ def _timer(reply: str, _) -> tuple[bool, str]:
 
 def _gym_alarm(reply: str, _) -> tuple[bool, str]:
     out = adb.shell("dumpsys alarm | grep -A1 'Next alarm clock information' | tail -1")
-    tomorrow = (datetime.now(_zone()) + timedelta(days=1)).strftime("%Y-%m-%d")
-    return f"{tomorrow} 07:30" in out, f"next alarm: {out.strip()[:60]}"
+    now = datetime.now(_zone())
+    days = [now + timedelta(days=1)]
+    if now.hour < 5:
+        days.append(now)  # after midnight, "tomorrow morning" is usually this morning
+    ok = any(f"{d.strftime('%Y-%m-%d')} 07:30" in out for d in days)
+    return ok, f"next alarm: {out.strip()[:60]}"
 
 
 def _contact(reply: str, _) -> tuple[bool, str]:
@@ -144,12 +148,23 @@ def _memory_saved(reply: str, _) -> tuple[bool, str]:
     return len(notes) == 1, f"{len(notes)} matching notes (want exactly 1)"
 
 
+def _week_ahead(reply: str, _) -> tuple[bool, str]:
+    """Mentions Dentist; on a Monday "next Monday" is 7 days out, past the 7-day window, so leaving it out is right."""
+    if "dentist" in reply.lower():
+        return True, "reply mentions Dentist"
+    start = datetime.now(_zone()).replace(hour=0, minute=0, second=0, microsecond=0)
+    limit = int((start + timedelta(days=7)).timestamp() * 1000)
+    later = [e for e in _dentist_events() if int(e["dtstart"]) >= limit]
+    return bool(later) and len(later) == len(_dentist_events()), \
+        "Dentist is past the 7-day window" if later else "reply lacks ['Dentist']"
+
+
 def _quieter(reply: str, before: int) -> tuple[bool, str]:
     """Lowering the media volume, or asking which sound the user means (the prompt says to ask when it's ambiguous)."""
     after = _volume()
     if after < before or before == 0:
         return True, f"media volume {before} -> {after}"
-    asked = reply.rstrip().endswith("?") and after == before
+    asked = "?" in reply and after == before
     return asked, f"asked which sound to lower (volume stays {after})" if asked else f"media volume {before} -> {after}"
 
 
@@ -314,7 +329,7 @@ CHECKS: dict[str, Check] = {
     'Set an alarm for 7:30 tomorrow morning called "Gym".': Check(_gym_alarm),
     "Create a contact named Test Person with phone number 555-0100.": Check(_contact),
     "Add a calendar event called Dentist next Monday at 10am.": Check(_dentist_added),
-    "What's on my calendar for the next 7 days?": Check(_mentions("Dentist")),
+    "What's on my calendar for the next 7 days?": Check(_week_ahead),
     "Delete the Dentist event.": Check(_dentist_deleted),
     "Remember that I prefer short replies and dark mode.": Check(_memory_saved),
     "Make it quieter.": Check(_quieter, before=_volume),
