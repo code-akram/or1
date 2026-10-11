@@ -328,6 +328,14 @@ object ActivityLog {
         return updated
     }
 
+    /** A one-off routine retires itself after its run: "Created routine" has nothing left to undo. */
+    fun expireRoutine(routineId: String) {
+        _effects.value.filter { e ->
+            e.canUndo() && e.undo?.let { runCatching { JSONObject(it) }.getOrNull() }
+                ?.let { it.optString("op") == "routine_remove" && it.optString("id") == routineId } == true
+        }.forEach { update(it.id, UndoState.EXPIRED, "The routine ran and retired.") }
+    }
+
     private fun append(record: JSONObject) {
         runCatching { file?.appendText(record.toString() + "\n") }
     }

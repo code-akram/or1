@@ -235,6 +235,7 @@ object Routines {
                 // Its alarm may still be pending (run early from debug or a boot catch-up).
                 cancel(id)
                 synchronized(this) { save(all().filter { it.id != id }) }
+                ActivityLog.expireRoutine(id)
             } else {
                 val next = nextRun(r, ZonedDateTime.now(ZoneId.systemDefault())).toInstant().toEpochMilli()
                 update(id) { it.copy(next = next, lastRun = System.currentTimeMillis()) }

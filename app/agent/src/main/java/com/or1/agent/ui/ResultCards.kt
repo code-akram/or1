@@ -647,12 +647,14 @@ private fun RoutineCard(card: ResultCard.RoutineCreated, live: Boolean) {
         val list by Routines.list.collectAsState()
         list.firstOrNull { it.id == card.routineId }
     } else null
+    val gone = state == UndoState.UNDONE
+    // A one-off removes itself once it has run (or the user removed it): nothing left to undo or edit.
+    val missing = live && routine == null && !gone
     CardFrame {
         CardHeader(Icons.Routine, "Routine") {
-            EffectAction(card.effect, state, "Undo", "Removed") { AgentHub.undo(card.effect.id) }
+            if (!missing) EffectAction(card.effect, state, "Undo", "Removed") { AgentHub.undo(card.effect.id) }
         }
-        Column(Modifier.padding(start = 14.dp, end = 14.dp, bottom = if (actions.openRoutines == null) 14.dp else 4.dp)) {
-            val gone = state == UndoState.UNDONE
+        Column(Modifier.padding(start = 14.dp, end = 14.dp, bottom = if (actions.openRoutines == null || missing) 14.dp else 4.dp)) {
             Text(
                 routine?.title ?: card.title ?: card.effect.label, style = Type.Label.copy(color = if (gone) Palette.Text3 else Palette.Text),
                 maxLines = 2, overflow = TextOverflow.Ellipsis,
@@ -667,11 +669,11 @@ private fun RoutineCard(card: ResultCard.RoutineCreated, live: Boolean) {
                         style = Type.Caption.copy(fontFeatureSettings = "tnum"), modifier = Modifier.padding(top = 6.dp),
                     )
                 }
-            } else if (live && !gone) {
-                Text("Removed since", style = Type.Caption, modifier = Modifier.padding(top = 4.dp))
+            } else if (missing) {
+                Text("Ran or removed since", style = Type.Caption, modifier = Modifier.padding(top = 4.dp))
             }
         }
-        actions.openRoutines?.let { open ->
+        if (!missing) actions.openRoutines?.let { open ->
             Row(Modifier.padding(start = 4.dp, bottom = 4.dp)) { UndoChip("Edit", open) }
         }
         FailedReason(card.effect, state)
