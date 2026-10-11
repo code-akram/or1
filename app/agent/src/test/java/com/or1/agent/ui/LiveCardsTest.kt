@@ -195,6 +195,53 @@ class LiveCardsTest {
         "[22] Button 'Forward' @570,1500 click",
     )
 
+    /** Captured from Gmail on the RAVOZ (2026-10-12): toolbar listed last, the pager's next message off screen at x 1144. */
+    private val captured = screen(
+        "com.google.android.gm",
+        "[1] ViewPager 'Item pager' @360,752 scroll",
+        "[2] TextView '✅ Dev, finish setting up your Android device with Google Inbox' @328,232 click",
+        "[3] ImageView 'Add star' @672,232 click",
+        "[4] LinearLayout 'Upper header' @360,427 click",
+        "[5] ImageView 'Show contact information for Google' @96,425 click",
+        "[6] TextView 'Google' @213,397",
+        "[7] TextView 'Yesterday' @313,398",
+        "[8] LinearLayout 'Recipient summary container' @236,469 click",
+        "[9] TextView 'to me' @212,463",
+        "[10] Button 'Unsubscribe' @507,417 click",
+        "[11] ImageView 'More options' @664,417 click",
+        "[12] WebView 'Conversation webview' @360,670 click",
+        "[13] LinearLayout 'Reply button' @170,1422 click",
+        "[14] TextView 'Reply' @197,1422",
+        "[15] LinearLayout 'Forward button' @462,1422 click",
+        "[16] TextView 'Forward' @489,1422",
+        "[17] FrameLayout 'Add emoji reaction' @652,1422 click",
+        "[18] WebView '' @1144,670 scroll focused",
+        "[19] View 'A new sign-in on Android devtest012388@gmail.com We noticed a new sign-in to you' @1144,1027",
+        "[20] View 'A new sign-in on Android devtest012388@gmail.com We noticed a new sign-in to you' @1144,1027",
+        "[21] TextView 'A new sign-in on Android' @1144,896",
+        "[22] View 'devtest012388@gmail.com' @1171,966",
+        "[23] TextView 'We noticed a new sign-in to your Google Account on a Android device. If this was' @1144,1146",
+        "[24] View 'Check activity' @1144,1310 click",
+        "[25] TextView 'Check activity' @1144,1317",
+        "[26] ImageButton 'Navigate up' @56,64 click",
+        "[27] Button 'Archive' @400,64 click",
+        "[28] Button 'Delete' @496,64 click",
+        "[29] Button 'Mark unread' @592,64 click",
+        "[30] ImageView 'More options' @680,64 click",
+        "[31] FrameLayout 'Mail' @191,1552 selected",
+        "[32] FrameLayout 'Meet' @528,1552 click",
+        "[33] TextView 'Deal with it later' @360,214",
+        "[34] TextView 'Snooze an email to hide it until a specific time in the future' @360,321",
+        "[35] ImageView 'More options' @680,64 click",
+        "[36] View 'Dismiss' @360,800",
+    )
+
+    @Test fun readsGmailInTheOrderItDrawsNotTheOrderItLists() {
+        val email = EmailReads.parse(captured)!!
+        assertEquals("Google", email.from)
+        assertEquals("✅ Dev, finish setting up your Android device with Google", email.subject)
+    }
+
     @Test fun readsAnOpenMessage() {
         val email = EmailReads.parse(message)!!
         assertEquals("Amazon.com", email.from)

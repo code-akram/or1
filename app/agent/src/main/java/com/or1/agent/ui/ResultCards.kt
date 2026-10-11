@@ -202,7 +202,8 @@ object ResultCards {
         }
         // The last message read in Gmail.
         screens.asReversed().firstNotNullOfOrNull { call ->
-            if (ScreenDump.foreground(call.result!!) != EmailReads.GMAIL) null else EmailReads.parse(call.result)?.let { call.id to it }
+            // A parser bug must never take down the home screen.
+            if (ScreenDump.foreground(call.result!!) != EmailReads.GMAIL) null else runCatching { EmailReads.parse(call.result) }.getOrNull()?.let { call.id to it }
         }?.let { (id, email) -> out += id to ResultCard.Email(id, email) }
         return out.sortedBy { it.first }.map { it.second }
     }

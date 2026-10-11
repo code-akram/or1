@@ -129,9 +129,10 @@ data class EmailRead(val from: String, val subject: String, val quote: String)
 object EmailReads {
     const val GMAIL = "com.google.android.gm"
     private const val MAX_QUOTE = 320
-    /** How far (px) the "to me" line may sit from the sender row's Reply button, and how many elements above it the sender. */
-    private const val ROW_SPAN = 160
-    private const val SENDER_REACH = 3
+    private const val SCREEN_W = 720
+    /** How far (px) the subject may sit from the star, and the sender above the "to me" line. */
+    private const val SUBJECT_SPAN = 40
+    private const val SENDER_SPAN = 90
     private val RECIPIENT = Regex("^to [^.!?:]{1,60}$", RegexOption.IGNORE_CASE)
 
     /** Toolbar and message chrome: never the subject, sender or body. */
@@ -152,27 +153,30 @@ object EmailReads {
     fun parse(result: String): EmailRead? {
         val dump = ScreenDump.parse(result) ?: return null
         if (dump.pkg != GMAIL) return null
-        val els = dump.elements
+        // Gmail doesn't list its views top to bottom (the toolbar comes last, and the pager's neighbouring messages sit
+        // off screen to the right), so read what's on screen in reading order.
+        val els = dump.elements.filter { it.x in 0..SCREEN_W }.sortedWith(compareBy({ it.y }, { it.x }))
         val archive = els.indexOfFirst { base(it.label).equals("archive", ignoreCase = true) }
-        val reply = els.indexOfFirst { base(it.label).equals("reply", ignoreCase = true) && it.y > (els.getOrNull(archive)?.y ?: Int.MAX_VALUE) }
-        if (archive < 0 || reply < 0) return null
-        val header = els.subList(archive + 1, reply)
-        // The expanded message's sender: just above its "to me" line (earlier messages in a thread are collapsed rows).
-        // Beside the sender row's Reply button, so a body line that starts with "To" can't pass for it.
-        val to = header.indexOfLast { RECIPIENT.matches(base(it.label)) && kotlin.math.abs(it.y - els[reply].y) < ROW_SPAN }
-        if (to < 0) return null
-        val candidates = header.withIndex().filter { (_, e) -> isText(e) }
-        val subject = candidates.firstOrNull()?.let { (i, e) -> i to stripLabel(base(e.label)) } ?: return null
-        val from = candidates.lastOrNull { (i, _) -> i < to && i > subject.first && to - i <= SENDER_REACH }?.value?.label?.let(::base) ?: return null
-        if (subject.second.isBlank() || from.isBlank() || from == subject.second) return null
-        // The body: text after the sender row's buttons, up to the reply bar (or the end of what was read).
-        val bodyStart = reply + 1
-        val end = els.withIndex().indexOfFirst { (i, e) -> i > bodyStart && base(e.label).lowercase() in setOf("reply", "reply all", "forward") }
+        if (archive < 0) return null
+        val top = els[archive].y
+        // The expanded message's "to me" line; the subject is above it, the sender just above it.
+        val to = els.indexOfFirst { it.y > top && RECIPIENT.matches(base(it.label)) }
+        if (to < 0 || els.none { it.y > els[to].y && base(it.label).equals("reply", ignoreCase = true) }) return null
+        val texts = els.withIndex().filter { (i, e) -> i < to && e.y > top && isText(e) }
+        // The subject sits on the star's row; a tooltip can float above it.
+        val star = els.firstOrNull { it.y > top && base(it.label).lowercase().let { l -> l == "add star" || l == "remove star" } }
+        val subjectAt = (star?.let { s -> texts.filter { kotlin.math.abs(it.value.y - s.y) < SUBJECT_SPAN }.minByOrNull { kotlin.math.abs(it.value.y - s.y) } }
+            ?: texts.firstOrNull()) ?: return null
+        val subject = stripLabel(base(subjectAt.value.label))
+        val from = texts.lastOrNull { (i, e) -> i > subjectAt.index && els[to].y - e.y in 0..SENDER_SPAN }?.value?.label?.let(::base) ?: return null
+        if (subject.isBlank() || from.isBlank() || from == subject) return null
+        // The body: text after the "to me" line, up to the reply bar (or the end of what was read).
+        val end = els.withIndex().indexOfFirst { (i, e) -> i > to && base(e.label).lowercase() in setOf("reply", "reply all", "forward") }
             .let { if (it < 0) els.size else it }
-        val quote = els.subList(bodyStart.coerceAtMost(end), end).asSequence()
-            .filter { isText(it) && it.cls != "WebView" && base(it.label) != subject.second && base(it.label) != from }
+        val quote = els.subList(to + 1, maxOf(to + 1, end)).asSequence()
+            .filter { isText(it) && it.cls != "WebView" && base(it.label) != subject && base(it.label) != from }
             .map { base(it.label) }.distinct().joinToString(" ").replace(Regex("\\s+"), " ").trim()
-        return EmailRead(from, subject.second, if (quote.length > MAX_QUOTE) quote.take(MAX_QUOTE).trimEnd() + "…" else quote)
+        return EmailRead(from, subject, if (quote.length > MAX_QUOTE) quote.take(MAX_QUOTE).trimEnd() + "…" else quote)
     }
 
     /** The visible text of a label: "text (description)" is how the screen tool joins both. */
