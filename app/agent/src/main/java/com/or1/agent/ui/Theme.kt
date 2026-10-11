@@ -194,6 +194,17 @@ object Icons {
             "s3.58,-8 8,-8 8,3.58 8,8 -3.58,8 -8,8zM12.5,7H11v6l5.25,3.15 0.75,-1.23 -4.5,-2.67z"
     )
 
+    /** Irreversible: a triangle with "!". */
+    val Warn = icon("M1,21h22L12,2 1,21zM13,18h-2v-2h2v2zM13,14h-2v-4h2v4z")
+    /** The Today tab (activity). */
+    val History = icon(
+        "M13,3c-4.97,0 -9,4.03 -9,9H1l3.89,3.89 0.07,0.14L9,12H6c0,-3.87 3.13,-7 7,-7s7,3.13 7,7 -3.13,7 -7,7c-1.93,0 -3.68,-0.79" +
+            " -4.94,-2.06l-1.42,1.42C8.27,19.99 10.51,21 13,21c4.97,0 9,-4.03 9,-9s-4.03,-9 -9,-9zM12,8v5l4.28,2.54 0.72,-1.21" +
+            " -3.5,-2.08V8H12z"
+    )
+    /** What or1 knows (memory notes). */
+    val Notes = icon("M3,18h12v-2H3v2zM3,6v2h18V6H3zM3,13h18v-2H3v2z")
+
     private fun icon(path: String): ImageVector =
         ImageVector.Builder(defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)
             .addPath(PathParser().parsePathString(path).toNodes(), fill = SolidColor(Color.Black))

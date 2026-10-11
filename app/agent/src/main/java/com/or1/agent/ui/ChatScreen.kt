@@ -76,6 +76,7 @@ import com.or1.agent.AgentHub
 import com.or1.agent.ChatItem
 import com.or1.agent.NotifListener
 import com.or1.agent.Routines
+import com.or1.agent.today
 import com.or1.agent.tools.HiddenDisplay
 import java.util.Calendar
 import kotlinx.coroutines.delay
@@ -106,12 +107,13 @@ fun ChatScreen(nowStrip: @Composable () -> Unit = {}) {
         var expanded by rememberSaveable { mutableStateOf(false) }
         var viewerOpen by remember { mutableStateOf(false) }
         var pastChat by remember { mutableStateOf<PastChat?>(null) }
-        var routinesOpen by remember { mutableStateOf(false) }
+        // Routines, Today or What or1 knows, over the chat (one at a time).
+        var page by remember { mutableStateOf<Page?>(null) }
         // Bumped by the home button: the conversation scrolls to its end.
         var homeTaps by remember { mutableIntStateOf(0) }
         LaunchedEffect(showRoutines) {
             if (showRoutines) {
-                routinesOpen = true
+                page = Page.ROUTINES
                 AgentHub.routinesShown()
             }
         }
@@ -171,7 +173,7 @@ fun ChatScreen(nowStrip: @Composable () -> Unit = {}) {
         fun goHome() {
             scope.launch { drawer.close() }
             viewerOpen = false
-            routinesOpen = false
+            page = null
             pastChat = null
             focus.clearFocus(force = true)
             keyboard?.hide()
@@ -186,7 +188,7 @@ fun ChatScreen(nowStrip: @Composable () -> Unit = {}) {
                 // Drawn over everything below.
                 drawer.isOpen -> scope.launch { drawer.close() }
                 viewerOpen -> viewerOpen = false
-                routinesOpen -> routinesOpen = false
+                page != null -> page = null
                 pastChat != null -> pastChat = null
                 else -> closeComposer()
             }
@@ -205,7 +207,7 @@ fun ChatScreen(nowStrip: @Composable () -> Unit = {}) {
                             totalCost = totalCost,
                             routineCount = routines.size,
                             onNewChat = { AgentHub.newConversation(); scope.launch { drawer.close() } },
-                            onRoutines = { routinesOpen = true; scope.launch { drawer.close() } },
+                            onPage = { page = it; scope.launch { drawer.close() } },
                             onOpen = { pastChat = it; scope.launch { drawer.close() } },
                             open = drawer.isOpen,
                         )
@@ -221,7 +223,7 @@ fun ChatScreen(nowStrip: @Composable () -> Unit = {}) {
                                 onNewChat = { AgentHub.newConversation() },
                             )
                             for (alert in alerts) {
-                                AlertBanner(alert, onOpen = { routinesOpen = true }, onDismiss = { AgentHub.dismissAlert(alert.id) })
+                                AlertBanner(alert, onOpen = { page = Page.ROUTINES }, onDismiss = { AgentHub.dismissAlert(alert.id) })
                             }
                             nowStrip()
                             // Tapping empty space closes the keyboard: with the system UI locked down there's no back button.
@@ -258,12 +260,17 @@ fun ChatScreen(nowStrip: @Composable () -> Unit = {}) {
                             )
                         }
                         pastChat?.let { HistoryView(it, onClose = { pastChat = null }) }
-                        if (routinesOpen) RoutinesView(onClose = { routinesOpen = false }, onOpenPreview = { viewerOpen = true })
+                        when (page) {
+                            Page.ROUTINES -> RoutinesView(onClose = { page = null }, onOpenPreview = { viewerOpen = true })
+                            Page.TODAY -> ActivityView(onClose = { page = null })
+                            Page.MEMORY -> MemoryView(onClose = { page = null })
+                            null -> {}
+                        }
                         if (viewerOpen) {
                             WorkViewer(
                                 onClose = { viewerOpen = false },
                                 // Back to the chat with the composer open, to ask about what's on the work screen.
-                                onAsk = { viewerOpen = false; routinesOpen = false; expanded = true },
+                                onAsk = { viewerOpen = false; page = null; expanded = true },
                             )
                         }
                     }
@@ -389,7 +396,10 @@ fun TurnView(turn: Turn, active: Boolean, preview: android.graphics.Bitmap?, onO
     Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = modifier) {
         turn.user?.let { UserBubble(it) }
         if (turn.steps.isNotEmpty() || active) {
-            WorkCard(turn, active, preview, onOpenPreview)
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                WorkCard(turn, active, preview, onOpenPreview)
+                if (turn.effects.isNotEmpty()) Receipt(turn.effects)
+            }
         }
         for (info in turn.infos) InfoLine(info)
         turn.reply?.let { ReplyBlock(it) } ?: turn.draft?.let { ReplyBlock(ChatItem.Reply(it.id, it.text, 0.0, 0.0)) }
@@ -398,8 +408,10 @@ fun TurnView(turn: Turn, active: Boolean, preview: android.graphics.Bitmap?, onO
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Drawer(totalCost: Double, routineCount: Int, onNewChat: () -> Unit, onRoutines: () -> Unit, onOpen: (PastChat) -> Unit, open: Boolean) {
+private fun Drawer(totalCost: Double, routineCount: Int, onNewChat: () -> Unit, onPage: (Page) -> Unit, onOpen: (PastChat) -> Unit, open: Boolean) {
     val context = LocalContext.current
+    val effects by AgentHub.effects.collectAsState()
+    val todayCount = remember(effects, open) { effects.today().size }
     // Bumped after a rename or delete, to re-read the list.
     var version by remember { mutableIntStateOf(0) }
     val chats = remember(open, version) { if (open) History.list(context) else emptyList() }
@@ -426,15 +438,9 @@ private fun Drawer(totalCost: Double, routineCount: Int, onNewChat: () -> Unit, 
                 Spacer(Modifier.width(14.dp))
                 Text("New chat", style = Type.Body)
             }
-            Row(
-                Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(14.dp)).clickable(onClick = onRoutines).padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Routine, null, tint = Palette.Text, modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(14.dp))
-                Text("Routines", style = Type.Body, modifier = Modifier.weight(1f))
-                if (routineCount > 0) Text("$routineCount", style = Type.Caption)
-            }
+            DrawerEntry(Icons.History, "Today", todayCount) { onPage(Page.TODAY) }
+            DrawerEntry(Icons.Routine, "Routines", routineCount) { onPage(Page.ROUTINES) }
+            DrawerEntry(Icons.Notes, "What or1 knows") { onPage(Page.MEMORY) }
             Spacer(Modifier.height(18.dp))
             Text("Recent", style = Type.Caption, modifier = Modifier.padding(start = 12.dp, bottom = 6.dp))
             Box(Modifier.weight(1f)) {
@@ -491,6 +497,22 @@ private fun Drawer(totalCost: Double, routineCount: Int, onNewChat: () -> Unit, 
         }
     }
 }
+
+@Composable
+private fun DrawerEntry(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, count: Int = 0, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick).padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, tint = Palette.Text, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(14.dp))
+        Text(text, style = Type.Body, modifier = Modifier.weight(1f))
+        if (count > 0) Text("$count", style = Type.Caption.copy(fontFeatureSettings = "tnum"))
+    }
+}
+
+/** The screens the drawer opens over the chat. */
+enum class Page { ROUTINES, TODAY, MEMORY }
 
 /** Shows cost, seconds and raw tool calls (see [DeveloperDetails]). */
 @Composable

@@ -28,13 +28,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -45,8 +50,16 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.or1.agent.AgentHub
 import com.or1.agent.ChatItem
+import com.or1.agent.Effect
+import com.or1.agent.UndoState
+import com.or1.agent.UndoTier
+import kotlinx.coroutines.delay
 
 /** One request and everything it produced, so a turn's tool steps collapse into a single working card. */
 data class Turn(
@@ -55,6 +68,8 @@ data class Turn(
     val infos: List<ChatItem.Info>,
     val reply: ChatItem.Reply?,
     val draft: ChatItem.Draft? = null,
+    /** What the turn changed (write calls only), in order: the receipt. */
+    val effects: List<ChatItem.Effect> = emptyList(),
 ) {
     val key: Long get() = user?.id ?: steps.firstOrNull()?.id ?: reply?.id ?: infos.firstOrNull()?.id ?: 0L
     val toolCalls get() = steps.filterIsInstance<ChatItem.ToolCall>()
@@ -69,11 +84,12 @@ fun groupTurns(items: List<ChatItem>): List<Turn> {
     val infos = mutableListOf<ChatItem.Info>()
     var reply: ChatItem.Reply? = null
     var draft: ChatItem.Draft? = null
+    val effects = mutableListOf<ChatItem.Effect>()
     fun flush() {
         if (user != null || steps.isNotEmpty() || infos.isNotEmpty() || reply != null || draft != null) {
-            turns += Turn(user, steps.toList(), infos.toList(), reply, draft)
+            turns += Turn(user, steps.toList(), infos.toList(), reply, draft, effects.toList())
         }
-        user = null; steps.clear(); infos.clear(); reply = null; draft = null
+        user = null; steps.clear(); infos.clear(); reply = null; draft = null; effects.clear()
     }
     for (item in items) when (item) {
         is ChatItem.User -> { flush(); user = item }
@@ -81,7 +97,7 @@ fun groupTurns(items: List<ChatItem>): List<Turn> {
         is ChatItem.Info -> infos += item
         is ChatItem.Draft -> draft = item
         is ChatItem.Reply -> { reply = item; flush() }
-        is ChatItem.Effect -> {}
+        is ChatItem.Effect -> effects += item
     }
     flush()
     return turns
@@ -261,6 +277,114 @@ private fun StepRow(step: ChatItem.ToolCall, active: Boolean) {
                     .padding(10.dp),
             )
         }
+    }
+}
+
+/**
+ * The receipt under a turn's work card: one row per side effect, with Undo where there's an inverse. Reads and
+ * navigation aren't effects; they stay in the card's "N steps".
+ */
+@Composable
+fun Receipt(effects: List<ChatItem.Effect>, onUndo: (Effect) -> Unit = { AgentHub.undo(it.id) }) {
+    val shape = RoundedCornerShape(16.dp)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Palette.Ink2)
+            .border(1.dp, Palette.Line, shape)
+            .animateContentSize(Motion.layout()),
+    ) {
+        effects.forEachIndexed { i, item ->
+            key(item.effect.id) {
+                ReceiptRow(item.effect, onUndo, (if (i > 0) Modifier.hairlineTop() else Modifier).padding(start = 14.dp, end = 4.dp))
+            }
+        }
+    }
+}
+
+/** A 1 dp `line` rule along the top edge, between rows. */
+fun Modifier.hairlineTop(): Modifier = drawBehind {
+    drawRect(Palette.Line, size = androidx.compose.ui.geometry.Size(size.width, 1.dp.toPx()))
+}
+
+/**
+ * One side effect: glyph (✓ done, `warn` for irreversible, the march while its undo runs), the past-tense label and
+ * the undo state: an Undo chip while it can be undone ("Ask or1 to undo" when the agent has to do it), "Undone"
+ * with the label struck through, the reason when the undo failed, nothing once it has expired. [time] and [source]
+ * are for the Today list.
+ */
+@Composable
+fun ReceiptRow(effect: Effect, onUndo: (Effect) -> Unit, modifier: Modifier = Modifier, time: String? = null, source: String? = null) {
+    // An offer runs out on its own (the timer ended, the alarm rang): wake once at that moment, no ticking.
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    val state = effect.stateAt(now)
+    if (state == UndoState.AVAILABLE && effect.expiresAt > 0) {
+        LaunchedEffect(effect.expiresAt) {
+            delay((effect.expiresAt - System.currentTimeMillis()).coerceAtLeast(0) + 50)
+            now = System.currentTimeMillis()
+        }
+    }
+    val irreversible = effect.tier == UndoTier.NONE
+    Row(modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (time != null) {
+            Text(time, style = Type.Caption.copy(fontFeatureSettings = "tnum"), modifier = Modifier.width(44.dp))
+        }
+        Box(Modifier.width(26.dp), contentAlignment = Alignment.CenterStart) {
+            when {
+                state == UndoState.PENDING -> March()
+                state == UndoState.FAILED -> Icon(Icons.Close, null, tint = Palette.Error, modifier = Modifier.size(16.dp))
+                irreversible -> Icon(Icons.Warn, "Irreversible", tint = Palette.Warn, modifier = Modifier.size(16.dp))
+                else -> Icon(Icons.Check, null, tint = if (state == UndoState.UNDONE) Palette.Text3 else Palette.Text2, modifier = Modifier.size(16.dp))
+            }
+        }
+        Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
+            val undone = state == UndoState.UNDONE
+            Text(
+                effect.label,
+                style = Type.Label.copy(
+                    color = if (undone) Palette.Text3 else Palette.Text,
+                    textDecoration = if (undone) TextDecoration.LineThrough else null,
+                ),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            source?.let { Text(it, style = Type.Caption, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            if (state == UndoState.FAILED) {
+                Text(
+                    "Couldn't undo" + (effect.detail?.let { ": $it" } ?: "."),
+                    style = Type.Caption.copy(color = Palette.Error), maxLines = 2, overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        when (state) {
+            UndoState.AVAILABLE -> UndoChip(if (effect.tier == UndoTier.AGENT) "Ask or1 to undo" else "Undo") { onUndo(effect) }
+            UndoState.PENDING -> StateNote("Undoing")
+            UndoState.UNDONE -> StateNote("Undone")
+            else -> Spacer(Modifier.width(10.dp))
+        }
+    }
+}
+
+@Composable
+private fun StateNote(text: String) {
+    Text(text, style = Type.Caption, modifier = Modifier.padding(horizontal = 10.dp))
+}
+
+/** A 48 dp touch target around a smaller chip, so the row stays compact. */
+@Composable
+private fun UndoChip(text: String, onClick: () -> Unit) {
+    Box(
+        Modifier.heightIn(min = 48.dp).clip(CircleShape).clickable(role = Role.Button, onClick = onClick).padding(horizontal = 4.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text,
+            style = Type.Step.copy(color = Palette.Text),
+            maxLines = 1,
+            modifier = Modifier.clip(CircleShape).background(Palette.Ink4).border(1.dp, Palette.Line, CircleShape)
+                .padding(horizontal = 14.dp, vertical = 6.dp),
+        )
     }
 }
 

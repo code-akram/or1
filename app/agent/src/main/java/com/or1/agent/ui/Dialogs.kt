@@ -80,16 +80,20 @@ fun RowMenu(actions: List<MenuAction>, label: String = "More") {
 
 /**
  * Renames in place: the row's title turns into a field with everything selected. Done on the keyboard, the check, or
- * tapping elsewhere saves; a blank name goes back to the default (shown as the placeholder).
+ * tapping elsewhere saves; a blank name goes back to the default (shown as the placeholder). [multiLine] wraps long
+ * text (a memory note) but still saves on Done rather than taking newlines.
  */
 @Composable
-fun InlineRename(initial: String, placeholder: String, style: TextStyle, onDone: (String) -> Unit, modifier: Modifier = Modifier) {
+fun InlineRename(
+    initial: String, placeholder: String, style: TextStyle, onDone: (String) -> Unit, modifier: Modifier = Modifier,
+    multiLine: Boolean = false,
+) {
     var value by remember { mutableStateOf(TextFieldValue(initial, TextRange(0, initial.length))) }
     val focus = remember { FocusRequester() }
     var done by remember { mutableStateOf(false) }
     // onFocusChanged also reports "unfocused" once before the field first gets focus; only a later loss saves.
     var hadFocus by remember { mutableStateOf(false) }
-    val finish = { if (!done) { done = true; onDone(value.text.trim()) } }
+    val finish = { if (!done) { done = true; onDone(value.text.replace('\n', ' ').trim()) } }
     LaunchedEffect(Unit) { focus.requestFocus() }
     Row(
         modifier.clip(RoundedCornerShape(12.dp)).background(Palette.Ink3).border(1.dp, Palette.Line, RoundedCornerShape(12.dp))
@@ -97,11 +101,12 @@ fun InlineRename(initial: String, placeholder: String, style: TextStyle, onDone:
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.weight(1f).padding(vertical = 10.dp)) {
-            if (value.text.isEmpty()) Text(placeholder, style = style.copy(color = Palette.Text2), maxLines = 1)
+            if (value.text.isEmpty()) Text(placeholder, style = style.copy(color = Palette.Text2), maxLines = if (multiLine) 3 else 1)
             BasicTextField(
                 value = value,
                 onValueChange = { value = it },
-                singleLine = true,
+                singleLine = !multiLine,
+                maxLines = if (multiLine) 8 else 1,
                 textStyle = style,
                 cursorBrush = SolidColor(Palette.Ember),
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),

@@ -9,9 +9,10 @@ the chat never leaves the screen.
 - `ChatScreen.kt`: top bar (menu, new chat), a one-line serif greeting with just-in-time suggestions right above the
   composer (`Suggestions.kt`: from notifications and battery, no API call), the conversation, the drawer with past
   chats (`History.kt`, from `files/transcripts/`). `or1` in the status rail (`StatusRail.kt`, 48 dp tall) is the home
-  button: it closes the drawer, Routines, a past chat, the viewer and the keyboard, and scrolls to the end. Back
-  (one handler for the screen) closes the topmost of drawer, viewer, Routines, past chat, then the composer; menus
-  close themselves first. The drawer's "Developer details" switch (`DeveloperDetails.kt`, shared prefs `ui`) shows
+  button: it closes the drawer, the open page (Routines, Today, What or1 knows), a past chat, the viewer and the
+  keyboard, and scrolls to the end. Back (one handler for the screen) closes the topmost of drawer, viewer, page, past
+  chat, then the composer; menus close themselves first. The drawer opens the pages: Today (with today's effect
+  count), Routines, What or1 knows. The drawer's "Developer details" switch (`DeveloperDetails.kt`, shared prefs `ui`) shows
   cost and seconds under replies, the raw call and result on tapping a step, and the session cost; off by default. A chat is renamed in place (⋯ menu or long-press: the
   title turns into a field; Done, the check or tapping away saves) or deleted with an Undo pill for 4 s (the file
   goes when the pill does; `Dialogs.kt`). Titles the user gives live in `files/chat-titles.json` (a blank one goes back to the
@@ -27,7 +28,15 @@ the chat never leaves the screen.
   frame 53 ms -> 13 ms (release) / 16 ms (debug).
 - `Cards.kt`: one working card per turn: step blocks (`Blocks.kt`, one 3 dp block per tool call: unlit, ember while
   running, grey when done, red when failed; the app's only progress indicator), the current step, the live thumbnail
-  of the work display; replies in serif.
+  of the work display; replies in serif. Under it, the receipt: one row per effect (`ChatItem.Effect`, see Effects
+  and undo): ✓ (or `warn` for irreversible), the past-tense label and a 48 dp Undo chip while `canUndo()` ("Ask or1
+  to undo" for tier 2); the march while it undoes, the label struck through and "Undone" after, the reason in red if
+  it failed, no chip once expired (each row wakes once at `expiresAt`, no ticking). Reads stay in "N steps".
+- `ActivityScreen.kt` (Today): every effect of today's chats and routine runs from `AgentHub.effects`, newest first
+  (time, label, "Chat" / "Routine · …", undo state), the rest of the week under a collapsed "Earlier this week".
+  A tier-2 undo closes it, so the new request shows in the chat.
+- `MemoryScreen.kt` (What or1 knows): the memory notes; tap or ⋯ Edit edits one in place (a blank one is deleted),
+  ⋯ Delete removes it at once with the 4 s Undo pill putting it back (`restoreNote`).
 - `WorkViewer.kt`: the work display full screen, and usable. Touches are forwarded (scaled to 720x1600); while or1
   works, the first touch stops it (`AgentHub.takeOver`, with "You took over the agent screen…" in the chat). The
   header shows the app in front and three blocks (marching ember while or1 works, steady green on the user's turn). The bottom bar has Back, Apps
