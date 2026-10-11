@@ -93,6 +93,8 @@ class ActivityTest {
         assertNull(classify("shell", args("command" to "dumpsys battery 2>/dev/null")))
         assertTrue(classify("shell", args("command" to "echo hi > /sdcard/x")) != null)
         assertTrue(classify("shell", args("command" to "ls; settings put system x 1")) != null)
+        assertNull(classify("shell", args("command" to "am start --display 3 -a android.intent.action.VIEW -d \"vnd.youtube:abc\"")))
+        assertTrue(classify("shell", args("command" to "am start -a android.intent.action.VIEW -d https://x.example/?q=1")) != null)
     }
 
     @Test fun tapsByLabel() {

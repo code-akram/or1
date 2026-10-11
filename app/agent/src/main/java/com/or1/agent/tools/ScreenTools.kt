@@ -133,7 +133,7 @@ class ScreenTools(private val context: Context) {
         val rid = node.viewIdResourceName?.substringAfterLast('/').orEmpty()
         // A bare switch (Settings rows) has only a resource id; its row's title is what the user and the receipt need.
         val rowTitle = if (text.isEmpty() && desc.isEmpty() && node.isCheckable) rowTitle(node) else null
-        var label = text.ifEmpty { desc.ifEmpty { rowTitle ?: rid } }
+        var label = text.ifEmpty { desc.ifEmpty { rowTitle ?: humanId(rid) } }
         if (text.isNotEmpty() && desc.isNotEmpty() && desc != text) label = "$text ($desc)"
         val flags = listOfNotNull(
             "click".takeIf { clickable }, "edit".takeIf { editable }, "scroll".takeIf { node.isScrollable },
@@ -146,6 +146,10 @@ class ScreenTools(private val context: Context) {
         elements[id] = element
         lines += "[$id] $cls '${label.take(80)}' @${element.x},${element.y} ${flags.joinToString(" ")}".trimEnd()
     }
+
+    /** skip_ad_button → "Skip ad button": a resource id is often the only name, and it ends up on receipts. */
+    private fun humanId(rid: String): String =
+        rid.replace('_', ' ').replace(Regex("([a-z])([A-Z])"), "$1 $2").trim().lowercase().replaceFirstChar { it.uppercase() }
 
     private fun rowTitle(node: AccessibilityNodeInfo): String? {
         var parent = node.parent

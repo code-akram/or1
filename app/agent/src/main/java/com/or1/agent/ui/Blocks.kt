@@ -35,11 +35,14 @@ enum class StepState(val color: Color) {
 }
 
 private const val PER_ROW = 16
+private const val MAX_SHOWN = 8
 
 /** The app's only progress indicator: one block per tool call, a block's width apart, wrapping every [PER_ROW]. */
 @Composable
-fun StepBlocks(states: List<StepState>, modifier: Modifier = Modifier) {
-    if (states.isEmpty()) return
+fun StepBlocks(all: List<StepState>, modifier: Modifier = Modifier) {
+    if (all.isEmpty()) return
+    // A long task would push the label off the header; the newest steps are the ones worth seeing.
+    val states = all.takeLast(MAX_SHOWN)
     val cols = minOf(states.size, PER_ROW)
     val rows = (states.size + PER_ROW - 1) / PER_ROW
     Canvas(modifier.size(CARD_BLOCK * (cols * 2 - 1), CARD_BLOCK * (rows * 2 - 1))) {

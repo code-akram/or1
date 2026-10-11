@@ -134,7 +134,8 @@ object Effects {
     private val readOnlyShell = listOf(
         "content query", "dumpsys", "getprop", "pm list", "pm path", "pm dump", "cmd package list", "settings get",
         "settings list", "ls", "cat", "echo", "grep", "head", "tail", "wc", "ps", "df", "du", "date", "id", "whoami",
-        "uptime", "stat", "which", "find", "logcat -d", "wm size", "wm density", "cmd uimode night",
+        "uptime", "stat", "which", "find", "logcat -d", "wm size", "wm density", "cmd uimode night", "sleep",
+        "monkey -p", "uiautomator dump", "screencap",
     )
 
     fun classify(tool: String, args: JSONObject, facts: CallFacts, now: ZonedDateTime): Classified? {
@@ -214,7 +215,9 @@ object Effects {
     fun isReadOnlyShell(command: String): Boolean {
         if (Regex("(^|[^0-9&])>").containsMatchIn(command) || "-delete" in command || "-exec" in command) return false
         return command.split(Regex("&&|\\|\\||[;|\\n]")).map { it.trim() }.filter { it.isNotEmpty() }.all { part ->
-            readOnlyShell.any { part == it || part.startsWith("$it ") }
+            readOnlyShell.any { part == it || part.startsWith("$it ") } ||
+                // Starting an app is navigation, like open; a web address could carry data out, like open with a URI.
+                (part.startsWith("am start") && !Regex("https?:").containsMatchIn(part))
         }
     }
 
