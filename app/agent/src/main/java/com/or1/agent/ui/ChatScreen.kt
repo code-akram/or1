@@ -107,6 +107,8 @@ fun ChatScreen() {
         var expanded by rememberSaveable { mutableStateOf(false) }
         var viewerOpen by remember { mutableStateOf(false) }
         var voiceOpen by remember { mutableStateOf(false) }
+        // What the wake phrase's utterance said, when it ended before voice mode opened.
+        var voiceFirst by remember { mutableStateOf<String?>(null) }
         var pastChat by remember { mutableStateOf<PastChat?>(null) }
         // Routines, Today or What or1 knows, over the chat (one at a time).
         var page by remember { mutableStateOf<Page?>(null) }
@@ -310,7 +312,9 @@ fun ChatScreen() {
                                         }
                                     },
                                     modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 10.dp),
-                                    onVoiceMode = { closeComposer(); voiceOpen = true },
+                                    onVoiceMode = { closeComposer(); voiceFirst = null; voiceOpen = true },
+                                    wakeAllowed = streamShown,
+                                    onWake = { heard -> closeComposer(); voiceFirst = heard; voiceOpen = true },
                                 )
                             }
                             pastChat?.let { HistoryView(it, onClose = { pastChat = null }) }
@@ -329,7 +333,7 @@ fun ChatScreen() {
                             }
                             evidence?.let { EvidenceViewer(it, onClose = { evidence = null }) }
                             TriageSheet(triageOpen, onClose = { triageOpen = false })
-                            VoiceModeHost(voiceOpen, onClose = { voiceOpen = false }, actions = cardActions)
+                            VoiceModeHost(voiceOpen, onClose = { voiceOpen = false; voiceFirst = null }, actions = cardActions, first = voiceFirst)
                         }
                     }
                 }
@@ -535,6 +539,7 @@ private fun Drawer(totalCost: Double, routineCount: Int, onNewChat: () -> Unit, 
                 )
             }
             SpeakRepliesSwitch()
+            WakePhraseSwitch()
             DeveloperSwitch()
             if (DeveloperDetails.on) {
                 Text(

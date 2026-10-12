@@ -56,14 +56,18 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.repeatOnLifecycle
 import com.or1.agent.ListenState
 import com.or1.agent.SpeechInput
+import com.or1.agent.SpeechOutput
+import com.or1.agent.VoiceError
 import com.or1.agent.VoiceEngines
 import com.or1.agent.tools.HiddenDisplay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -86,6 +90,11 @@ private data class Note(val text: String, val ms: Long, val at: Long = SystemClo
  * replaces the placeholder), release to send, slide up 56 dp for hands-free voice mode ([onVoiceMode]), slide left to
  * cancel. A press under 400 ms is a tap and just says "Hold to talk". While or1 works it's Stop, and holding it stops
  * or1 and listens. The mic dictates into the field (tap again to finish) and never sends.
+ *
+ * Wake phrase ([VoicePrefs.wakePhrase]): while [wakeAllowed] (the home in front, nothing over it) and the composer is
+ * an idle pill, it listens in the background, one utterance after another, for [WakePhrase]. Hearing it opens voice
+ * mode ([onWake]), which carries on with the same utterance ("Hey or1, set a timer…"); if the utterance already ended,
+ * [onWake] gets its text.
  */
 @Composable
 fun Composer(
@@ -98,9 +107,13 @@ fun Composer(
     onPlusAction: (PlusAction) -> Unit,
     modifier: Modifier = Modifier,
     onVoiceMode: () -> Unit = {},
+    wakeAllowed: Boolean = false,
+    onWake: (String?) -> Unit = {},
 ) {
     val context = LocalContext.current
     val speech = remember { VoiceEngines.input(context) }
+    // The wake listener's utterance is the one in progress (any other start takes the recogniser over).
+    val wake = remember { WakeOwner() }
     val hasText = input.hasText
     val action = when {
         busy -> PrimaryAction.STOP
@@ -129,6 +142,7 @@ fun Composer(
     DisposableEffect(Unit) { onDispose { if (use != VoiceUse.NONE) speech.cancel() } }
 
     fun startHold() {
+        wake.owns = false
         VoiceEngines.output(context).stop()
         note = null
         dropped = false
@@ -177,6 +191,7 @@ fun Composer(
 
     // From the + menu or an accessibility click: voice mode does its own listening.
     val openVoiceMode: () -> Unit = {
+        wake.owns = false
         if (use == VoiceUse.DICTATE) {
             speech.cancel()
             use = VoiceUse.NONE
@@ -188,6 +203,7 @@ fun Composer(
             VoiceUse.DICTATE -> speech.stop()
             VoiceUse.HOLD -> Unit
             VoiceUse.NONE -> {
+                wake.owns = false
                 VoiceEngines.output(context).stop()
                 note = null
                 openedForDictation = !expanded && !hasText
@@ -254,6 +270,23 @@ fun Composer(
         )
     }
     val voiceShown = use != VoiceUse.NONE || note != null
+    val wakeOn = wakeAllowed && VoicePrefs.wakePhrase && use == VoiceUse.NONE && !busy && !expanded && !hasText
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(wakeOn, lifecycle) {
+        if (!wakeOn) return@LaunchedEffect
+        // Only while the home is on screen: an app in the background may not use the microphone.
+        lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.RESUMED) {
+            try {
+                listenForWake(speech, VoiceEngines.output(context), wake)?.let { heard ->
+                    wake.owns = false
+                    onWake(heard.ifBlank { null })
+                }
+            } finally {
+                if (wake.owns) speech.cancel()
+                wake.owns = false
+            }
+        }
+    }
 
     // A plain swap, not AnimatedContent: the card's native field (an AndroidView) isn't redrawn when it comes back
     // inside a fading layer. The keyboard sliding in is the transition.
@@ -277,7 +310,7 @@ fun Composer(
                     VoiceSlot(use, speech, note, Modifier.weight(1f).padding(horizontal = 6.dp))
                 } else {
                     Text(
-                        "Ask or1…",
+                        if (wakeOn) "Hey or1, or ask…" else "Ask or1…",
                         style = Type.Body.copy(color = Palette.Text2),
                         maxLines = 1,
                         modifier = Modifier.weight(1f).padding(horizontal = 6.dp),
@@ -609,5 +642,37 @@ fun IconCircle(icon: ImageVector, label: String, onClick: () -> Unit, tint: Colo
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, label, tint = tint, modifier = Modifier.size(22.dp))
+    }
+}
+
+/** Whether the wake listener started the utterance in progress (so it may cancel it). */
+private class WakeOwner {
+    @Volatile
+    var owns = false
+}
+
+/**
+ * Listens for [WakePhrase], one utterance after another, not while or1 speaks. Returns what was said once it's heard:
+ * "" while the utterance is still going (voice mode carries on with it), else its final text; null if words can't come
+ * out (no recogniser, the language missing).
+ */
+private suspend fun listenForWake(speech: SpeechInput, output: SpeechOutput, wake: WakeOwner): String? {
+    var failures = 0
+    while (true) {
+        output.progress.first { !it.speaking }
+        wake.owns = true
+        speech.start()
+        val state = combine(speech.state, speech.partial) { s, p -> s to p }
+            .first { (s, p) -> WakePhrase.heard(p) || s == ListenState.IDLE || s == ListenState.ERROR }.first
+        val result = speech.result.value
+        when {
+            state == ListenState.LISTENING || state == ListenState.PROCESSING -> return ""
+            state == ListenState.IDLE && result != null && WakePhrase.heard(result) -> return result
+            speech.error.value?.kind == VoiceError.Kind.UNAVAILABLE -> return null
+        }
+        (result ?: speech.partial.value).takeIf { it.isNotBlank() }?.let { android.util.Log.d("or1-voice", "wake: not the phrase: $it") }
+        // Silence or other words: listen again (after a pause that grows if the recogniser keeps failing).
+        failures = if (state == ListenState.ERROR && speech.error.value?.kind !in setOf(VoiceError.Kind.NO_MATCH, VoiceError.Kind.TIMEOUT)) failures + 1 else 0
+        delay(if (failures == 0) 250 else (1_000L * failures).coerceAtMost(10_000))
     }
 }

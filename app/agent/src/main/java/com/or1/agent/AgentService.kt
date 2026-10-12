@@ -57,7 +57,7 @@ class AgentService : Service() {
  * files/taps.txt (tag or1-evidence). `--es acts list` writes today's routine acts ([AgentHub.routineActs]) to
  * files/routine-acts.txt.
  *
- * Voice ([Voice.kt]): `--es voice speak:<text>` speaks it and `--es voice listen` records one utterance; the result (final text,
+ * Voice ([Voice.kt]): `--es voice speak:<text>` speaks it (`bargein:<text>` plays it 1.5 s into or1's next spoken reply; `wake:<phrase>` adds a wake phrase in memory, empty clears it) and `--es voice listen` records one utterance; the result (final text,
  * peak level, sentences, word boundaries, recogniser and network) goes to files/voice.txt and logcat tag or1-voice;
  * `--es voice stop` stops both. `--es voice support` writes what each recogniser (default and on-device) says about its
  * languages (installed, downloading, downloadable, online) and the plan it picks; `--es voice download` triggers the
@@ -187,13 +187,20 @@ private fun voiceCommand(context: Context, command: String) {
                 command == "listen" -> debugListen(context)
                 command.startsWith("selftest") -> debugSelfTest(context, command.substringAfter(':', "Set a timer for ten minutes."))
                 command.startsWith("play:") -> debugSelfTest(context, command.removePrefix("play:"), listen = false)
+                command.startsWith("wake:") -> {
+                    val words = command.removePrefix("wake:").trim()
+                    com.or1.agent.ui.WakePhrase.extra = words.ifEmpty { null }?.let { Regex("\\b${Regex.escape(it)}\\b[\\s,.!?]*", RegexOption.IGNORE_CASE) }
+                    "wake: extra phrase ${words.ifEmpty { "cleared" }}"
+                }
+                // Barge-in: synthesised now, played 1.5 s into or1's next spoken reply (within 60 s).
+                command.startsWith("bargein:") -> debugSelfTest(context, command.removePrefix("bargein:"), listen = false, overSpeech = true)
                 command == "support" || command == "download" -> debugSupport(context, download = command == "download")
                 command == "stop" -> {
                     VoiceEngines.output(context).stop()
                     VoiceEngines.input(context).cancel()
                     "stopped"
                 }
-                else -> "unknown voice command '$command' (speak:<text>, listen, selftest[:<text>], play:<text>, stop, support, download)"
+                else -> "unknown voice command '$command' (speak:<text>, listen, selftest[:<text>], play:<text>, bargein:<text>, stop, support, download)"
             }
         } catch (e: Exception) {
             "error: $e"
@@ -241,7 +248,7 @@ private suspend fun debugSupport(context: Context, download: Boolean): String {
  * Speech in, without a person: the phrase is synthesised to a file, then played through a MediaPlayer while listening.
  * The player takes no audio focus, so the recogniser's focus request doesn't pause it the way it pauses TTS.
  */
-private suspend fun debugSelfTest(context: Context, phrase: String, listen: Boolean = true): String = kotlinx.coroutines.coroutineScope {
+private suspend fun debugSelfTest(context: Context, phrase: String, listen: Boolean = true, overSpeech: Boolean = false): String = kotlinx.coroutines.coroutineScope {
     val wav = java.io.File(context.cacheDir, "voice-selftest.wav")
     val synthesised = kotlinx.coroutines.withTimeoutOrNull(20_000) {
         kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { cont ->
@@ -268,6 +275,14 @@ private suspend fun debugSelfTest(context: Context, phrase: String, listen: Bool
     }
     // play: only the sound, for driving the UI's own listening (push-to-talk, voice mode) from adb.
     if (!listen) {
+        if (overSpeech) {
+            val speaking = kotlinx.coroutines.withTimeoutOrNull(60_000) { VoiceEngines.output(context).progress.first { it.speaking && it.index >= 0 } }
+            if (speaking == null) {
+                player.release()
+                return@coroutineScope "bargein: or1 didn't speak within 60 s"
+            }
+            kotlinx.coroutines.delay(1_500)
+        }
         player.start()
         kotlinx.coroutines.delay(player.duration.toLong() + 200)
         player.release()

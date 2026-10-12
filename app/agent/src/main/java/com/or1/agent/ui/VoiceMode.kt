@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.os.SystemClock
+import android.util.Log
 import android.view.WindowManager
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ExitTransition
@@ -68,6 +69,8 @@ import com.or1.agent.UndoTier
 import com.or1.agent.VoiceEngines
 import com.or1.agent.VoiceError
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
@@ -80,17 +83,29 @@ import kotlinx.coroutines.withTimeoutOrNull
 object VoicePrefs {
     private const val PREFS = "ui"
     private const val KEY = "speak_replies"
+    private const val WAKE = "wake_phrase"
 
     var speakReplies by mutableStateOf(false)
         private set
 
+    /** The drawer's "Listen for “Hey or1”": the composer listens for [WakePhrase] while the home is idle. Off by default. */
+    var wakePhrase by mutableStateOf(false)
+        private set
+
     fun load(context: Context) {
-        speakReplies = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY, false)
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        speakReplies = prefs.getBoolean(KEY, false)
+        wakePhrase = prefs.getBoolean(WAKE, false)
     }
 
     fun set(context: Context, value: Boolean) {
         speakReplies = value
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY, value).apply()
+    }
+
+    fun setWake(context: Context, value: Boolean) {
+        wakePhrase = value
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(WAKE, value).apply()
     }
 }
 
@@ -193,13 +208,58 @@ internal object Mentions {
     }
 }
 
+/** "Hey or1", as a recogniser writes it ("hey or one", "Hey, OR1", "okay or 1"), or "or1" as one word. */
+internal object WakePhrase {
+    private val phrase = Regex(
+        """\b(?:(?:hey|hi|hay|okay|ok)[,.!]?\s+(?:or|oar|ore|our|all|awe|aw)[\s-]*(?:one|1|won|wan)|or1|orone)\b[\s,.!?]*""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /** Debug (`--es voice wake:<phrase>`, in memory only): another phrase that also wakes, to test with synthesised speech. */
+    @Volatile
+    var extra: Regex? = null
+
+    private fun find(text: String) = phrase.find(text) ?: extra?.find(text)
+
+    fun heard(text: String): Boolean = find(text) != null
+
+    /** What was said after the phrase ("Hey or one, set a timer" → "set a timer"); [text] itself without it. */
+    fun strip(text: String): String = find(text)?.let { text.substring(it.range.last + 1) }?.trim() ?: text.trim()
+}
+
+/**
+ * Barge-in: while or1 speaks, the recogniser also hears or1's own voice. What it hears is the user only when it has
+ * words the reply doesn't (two or more), or a stop word.
+ */
+internal object Barge {
+    private val stops = setOf("stop", "wait", "cancel", "pause", "quiet", "enough", "hold", "shut", "nevermind", "no")
+
+    fun isUser(heard: String, spoken: String): Boolean {
+        val novel = Mentions.words(heard) - Mentions.words(spoken)
+        return novel.size >= 2 || novel.any { it in stops }
+    }
+
+    /**
+     * [heard] without an echo of [spoken] at its start: the leading words that are all in the reply, when they hold two
+     * or more of its telling words ("Timer set for three minutes stop" → "stop"). Otherwise [heard] as it is.
+     */
+    fun userPart(heard: String, spoken: String): String {
+        val said = Mentions.words(spoken)
+        val tokens = heard.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        val echo = tokens.takeWhile { t -> Mentions.words(t).all { it in said } }
+        if (echo.size == tokens.size || Mentions.words(echo.joinToString(" ")).size < 2) return heard.trim()
+        return tokens.drop(echo.size).joinToString(" ")
+    }
+}
+
 /**
  * Voice mode over the chat while [open] (the rail stays above it), and, whenever it's closed, the chat's spoken
  * replies (see [VoicePrefs]). [actions] are the stream's card actions (routines, triage, the viewer); voice mode closes
- * before each.
+ * before each. [first]: a request already heard (the wake phrase and what followed it, when the recogniser finished
+ * before voice mode opened).
  */
 @Composable
-fun VoiceModeHost(open: Boolean, onClose: () -> Unit, actions: CardActions = CardActions()) {
+fun VoiceModeHost(open: Boolean, onClose: () -> Unit, actions: CardActions = CardActions(), first: String? = null) {
     val context = LocalContext.current
     remember { VoicePrefs.load(context.applicationContext) }
     LaunchedEffect(open) {
@@ -224,7 +284,7 @@ fun VoiceModeHost(open: Boolean, onClose: () -> Unit, actions: CardActions = Car
             fun wrap(a: (() -> Unit)?) = a?.let { { onClose(); it() } }
             CardActions(wrap(actions.openRoutines), wrap(actions.openTriage), wrap(actions.openViewer), actions.ask?.let { ask -> { text: String -> onClose(); ask(text) } })
         }
-        CompositionLocalProvider(LocalCardActions provides closing) { VoiceMode(onClose) }
+        CompositionLocalProvider(LocalCardActions provides closing) { VoiceMode(onClose, first) }
     }
 }
 
@@ -240,6 +300,11 @@ private sealed interface Heard {
     data object Quiet : Heard
 }
 
+private const val VOICE_TAG = "or1-voice"
+
+/** A level (0..1, [com.or1.agent.VoiceLevels]) that counts as someone talking. */
+private const val SPEECH_LEVEL = 0.45f
+
 /** Voice mode ends after this long without words (silence, no match, or no recogniser). */
 private const val QUIET_MS = 8_000L
 
@@ -249,10 +314,11 @@ private const val QUIET_MS = 8_000L
  * reply in Spoken type, only the sentence being spoken (text) and the one before (text2), the turn's newest result
  * card (live: a timer counts down, Undo works), the meter (`live` listening, `ember` speaking, the march while or1
  * works) and one 72 dp Stop. A tap anywhere else interrupts speech and listens (or, while listening, finishes the
- * utterance).
+ * utterance). Barge-in: while or1 speaks it also listens, and talking over it (more than an echo of the reply, see
+ * [Barge]) stops the voice and carries on with what the user says. The wake phrase is dropped from what's heard.
  */
 @Composable
-private fun VoiceMode(onClose: () -> Unit) {
+private fun VoiceMode(onClose: () -> Unit, first: String?) {
     val context = LocalContext.current
     val input = remember { VoiceEngines.input(context) }
     val output = remember { VoiceEngines.output(context) }
@@ -279,10 +345,18 @@ private fun VoiceMode(onClose: () -> Unit) {
         keyboard?.hide()
         focus.clearFocus(force = true)
         var quietSince = SystemClock.uptimeMillis()
+        // A request heard before listening (the wake phrase's, or a barge-in's finished utterance).
+        var pending = first?.let(WakePhrase::strip)?.ifBlank { null }
+        // What or1 was saying when the user talked over it: its echo is taken off the front of what's heard.
+        var echo: String? = null
         while (true) {
             phase = Phase.LISTENING
-            when (val h = listen(input, output, quietSince)) {
+            val h = pending?.let { Heard.Words(it) } ?: listen(input, output, quietSince, echo.orEmpty())
+            pending = null
+            echo = null
+            when (h) {
                 is Heard.Words -> {
+                    Log.i(VOICE_TAG, "voice mode heard: ${h.text}")
                     problem = null
                     heard = h.text
                     turnKey = null
@@ -292,7 +366,12 @@ private fun VoiceMode(onClose: () -> Unit) {
                     val id = "voice-${turn?.key ?: SystemClock.uptimeMillis()}"
                     replyId = id
                     phase = Phase.SPEAKING
-                    say(output, turn?.let(::spokenSummary) ?: "Sorry, that didn't work.", id) { silentReply = it }
+                    val said = turn?.let(::spokenSummary) ?: "Sorry, that didn't work."
+                    Log.i(VOICE_TAG, "voice mode says: $said")
+                    say(output, input, said, id) { silentReply = it }?.let { barged ->
+                        echo = said
+                        pending = barged.text?.let { WakePhrase.strip(Barge.userPart(it, said)) }?.ifBlank { null }
+                    }
                     quietSince = SystemClock.uptimeMillis()
                 }
                 Heard.NoWords -> if (SystemClock.uptimeMillis() - quietSince >= QUIET_MS) break
@@ -435,7 +514,7 @@ private fun StatusLine(input: SpeechInput, phase: Phase, problem: String?) {
         Phase.LISTENING -> error?.takeIf { state == ListenState.LISTENING && it.kind == VoiceError.Kind.UNAVAILABLE }?.message
             ?: problem ?: "Listening"
         Phase.WORKING -> "Working"
-        Phase.SPEAKING -> "Tap to interrupt"
+        Phase.SPEAKING -> "Talk or tap to interrupt"
     }
     Text(
         text,
@@ -446,15 +525,20 @@ private fun StatusLine(input: SpeechInput, phase: Phase, problem: String?) {
     )
 }
 
-/** Listens once (or carries on with a push-to-talk utterance handed over by the composer). */
-private suspend fun listen(input: SpeechInput, output: SpeechOutput, quietSince: Long): Heard {
+/**
+ * Listens once (or carries on with an utterance already under way: push-to-talk handed over by the composer, the wake
+ * phrase, a barge-in). The words lose an [echo] of what or1 was saying and the wake phrase.
+ */
+private suspend fun listen(input: SpeechInput, output: SpeechOutput, quietSince: Long, echo: String): Heard {
     if (input.state.value == ListenState.IDLE || input.state.value == ListenState.ERROR) {
         output.stop()
         input.start()
     }
     val left = QUIET_MS - (SystemClock.uptimeMillis() - quietSince)
+    // Words, or a voice-level sound (the recogniser's partials come a second or so after speech starts): someone
+    // talking just before the quiet time is up isn't cut off.
     val began = withTimeoutOrNull(left.coerceAtLeast(1)) {
-        combine(input.state, input.partial) { s, p -> s != ListenState.LISTENING || p.isNotBlank() }.first { it }
+        combine(input.state, input.partial, input.level) { s, p, l -> s != ListenState.LISTENING || p.isNotBlank() || l >= SPEECH_LEVEL }.first { it }
     }
     if (began == null) {
         input.cancel()
@@ -465,7 +549,7 @@ private suspend fun listen(input: SpeechInput, output: SpeechOutput, quietSince:
         input.stop()
         if (withTimeoutOrNull(5_000) { done() } == null) input.cancel()
     }
-    val text = input.result.value?.trim()?.ifBlank { null }
+    val text = input.result.value?.let { WakePhrase.strip(Barge.userPart(it, echo)) }?.ifBlank { null }
     if (text != null && input.state.value == ListenState.IDLE) return Heard.Words(text)
     val e = input.error.value
     return if (e == null || e.kind == VoiceError.Kind.NO_MATCH || e.kind == VoiceError.Kind.TIMEOUT) Heard.NoWords else Heard.Problem(e.message)
@@ -480,17 +564,65 @@ private suspend fun ask(text: String): Turn? {
     return groupTurns(AgentHub.items.value).lastOrNull { (it.user?.id ?: -1) > mark && it.user?.text == text }
 }
 
-/** Speaks [text] to the end (or an interruption). Without a TTS engine, shows it for a while instead. */
-private suspend fun say(output: SpeechOutput, text: String, id: String, showSilently: (String?) -> Unit) {
+/** The user talked over or1: [text] is their finished utterance, or null while the recogniser is still hearing it. */
+private class Barged(val text: String?)
+
+/** or1's voice starts before barge-in listening does, so the recogniser's start doesn't clip it. */
+private const val BARGE_AFTER_MS = 600L
+
+/**
+ * Speaks [text] to the end, a tap, or a barge-in (returned). Without a TTS engine, shows it for a while instead. While
+ * speaking it listens ([bargeIn]); when it ends without one, the listening is dropped.
+ */
+private suspend fun say(output: SpeechOutput, input: SpeechInput, text: String, id: String, showSilently: (String?) -> Unit): Barged? {
     showSilently(null)
     val ready = output.available.value || withTimeoutOrNull(5_000) { output.available.first { it } } != null
     if (!ready) {
         showSilently(text)
         delay((text.length * 60L).coerceIn(2_000, 8_000))
-        return
+        return null
     }
     output.speak(text, id)
-    if (withTimeoutOrNull(180_000) { output.progress.first { it.id == id && !it.speaking } } == null) output.stop()
+    var barged: Barged? = null
+    coroutineScope {
+        val listening = launch { bargeIn(input, output, text) { barged = it } }
+        if (withTimeoutOrNull(180_000) { output.progress.first { it.id == id && !it.speaking } } == null) output.stop()
+        listening.cancel()
+    }
+    if (barged == null) {
+        input.cancel()
+        // A recogniser started again straight after a cancel fails with "client error" (5).
+        delay(300)
+    }
+    return barged
+}
+
+/**
+ * Listens while or1 speaks [spoken], again after each utterance that was only its echo (or nothing), until the user
+ * talks over it ([Barge.isUser]): then [onBarge] and the voice stops. A recogniser that can't give words (the level
+ * meter only) gives no barge-in.
+ */
+private suspend fun bargeIn(input: SpeechInput, output: SpeechOutput, spoken: String, onBarge: (Barged) -> Unit) {
+    delay(BARGE_AFTER_MS)
+    while (true) {
+        input.start()
+        val state = combine(input.state, input.partial) { s, p -> s to p }
+            .first { (s, p) -> Barge.isUser(p, spoken) || s == ListenState.IDLE || s == ListenState.ERROR }.first
+        val result = input.result.value
+        when {
+            state == ListenState.LISTENING || state == ListenState.PROCESSING -> onBarge(Barged(null))
+            state == ListenState.IDLE && result != null && Barge.isUser(result, spoken) -> onBarge(Barged(result))
+            input.error.value?.kind == VoiceError.Kind.UNAVAILABLE -> return
+            else -> {
+                result?.let { Log.i(VOICE_TAG, "barge-in: only the echo: $it") }
+                delay(300)
+                continue
+            }
+        }
+        Log.i(VOICE_TAG, "barge-in: ${result ?: input.partial.value}")
+        output.stop()
+        return
+    }
 }
 
 /** The screen stays on while voice mode is open (the chat's own keep-on follows only or1's work). */
@@ -514,14 +646,25 @@ private tailrec fun Context.activity(): Activity? = when (this) {
 @Composable
 fun SpeakRepliesSwitch() {
     val context = LocalContext.current
-    val on = VoicePrefs.speakReplies
+    VoiceSwitch("Speak replies", VoicePrefs.speakReplies) { VoicePrefs.set(context, it) }
+}
+
+/** The drawer's "Listen for “Hey or1”" switch. */
+@Composable
+fun WakePhraseSwitch() {
+    val context = LocalContext.current
+    VoiceSwitch("Listen for “Hey or1”", VoicePrefs.wakePhrase) { VoicePrefs.setWake(context, it) }
+}
+
+@Composable
+private fun VoiceSwitch(label: String, on: Boolean, onChange: (Boolean) -> Unit) {
     Row(
         Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(14.dp))
-            .toggleable(value = on, role = Role.Switch, onValueChange = { VoicePrefs.set(context, it) })
+            .toggleable(value = on, role = Role.Switch, onValueChange = onChange)
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("Speak replies", style = Type.Body, modifier = Modifier.weight(1f))
+        Text(label, style = Type.Body, modifier = Modifier.weight(1f))
         Switch(
             checked = on,
             onCheckedChange = null,

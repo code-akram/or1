@@ -305,6 +305,8 @@ class AndroidSpeechInput(private val context: Context) : SpeechInput {
         .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
         .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         .putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
+        // or1's name and wake phrase, which the recogniser otherwise drops as noise (API 33).
+        .apply { if (Build.VERSION.SDK_INT >= 33) putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, arrayListOf("Hey or one", "or one", "or1")) }
 
     private fun recognizer(r: RecognizerRoute): SpeechRecognizer? = recognizers[r] ?: runCatching {
         when (r) {
