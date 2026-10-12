@@ -78,6 +78,11 @@ object History {
         var id = 0L
         chat.file.forEachLine { line ->
             val record = runCatching { JSONObject(line) }.getOrNull() ?: return@forEachLine
+            // A request sent before its words were final, replaced by the final words: drop it.
+            if (record.optBoolean("superseded")) {
+                items.indexOfLast { it is ChatItem.User }.takeIf { it >= 0 }?.let { while (items.size > it) items.removeAt(items.lastIndex) }
+                return@forEachLine
+            }
             record.optString("user").takeIf { it.isNotEmpty() }?.let { items += ChatItem.User(id++, it) }
             // A routine run carried into the chat (AgentHub.continueInChat).
             record.optString("context_reply").takeIf { it.isNotEmpty() }?.let { items += ChatItem.Reply(id++, it, 0.0, 0.0) }

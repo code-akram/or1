@@ -74,9 +74,10 @@ interface SpeechInput {
     val level: StateFlow<Float>
     /**
      * [focus]: duck other audio while listening (push-to-talk, voice mode). The wake-phrase listener passes false, so
-     * media on the idle home isn't ducked whenever it listens.
+     * media on the idle home isn't ducked whenever it listens. [endSilenceMs]: how long a pause ends the utterance
+     * (voice mode asks for less than the recogniser's default); null keeps the default.
      */
-    fun start(focus: Boolean = true)
+    fun start(focus: Boolean = true, endSilenceMs: Long? = null)
     /** Stop listening and finish: the words heard so far become [result]. */
     fun stop()
     /** Stop and drop the utterance. */
@@ -97,6 +98,11 @@ interface SpeechOutput {
     val progress: StateFlow<SpeechProgress>
     val level: StateFlow<Float>
     fun speak(text: String, id: String)
+    /**
+     * Adds [text] after what reply [id] is saying (or has said): voice mode speaks a reply's sentences as they stream
+     * in. A different [id] than the reply in progress starts afresh, like [speak].
+     */
+    fun append(text: String, id: String)
     fun stop()
     fun release()
 }
@@ -253,8 +259,18 @@ class AndroidSpeechInput(private val context: Context) : SpeechInput {
     @Volatile
     private var takesFocus = true
 
-    override fun start(focus: Boolean) = onMain {
+    /** See [SpeechInput.start]; for the utterance in progress. */
+    @Volatile
+    private var endSilenceMs: Long? = null
+    /** When the utterance started listening, and its last partial (uptime ms), for the timing log. */
+    private var startedAt = 0L
+    private var lastPartialAt = 0L
+
+    override fun start(focus: Boolean, endSilenceMs: Long?) = onMain {
         takesFocus = focus
+        this.endSilenceMs = endSilenceMs
+        startedAt = SystemClock.uptimeMillis()
+        lastPartialAt = 0L
         session++
         // An utterance still being processed is dropped; the recogniser would otherwise be busy.
         metering = false
@@ -316,6 +332,12 @@ class AndroidSpeechInput(private val context: Context) : SpeechInput {
         .putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
         // or1's name and wake phrase, which the recogniser otherwise drops as noise (API 33).
         .apply { if (Build.VERSION.SDK_INT >= 33) putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, arrayListOf("Hey or one", "or one", "or1")) }
+        .apply {
+            endSilenceMs?.let {
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, it)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, it)
+            }
+        }
 
     private fun recognizer(r: RecognizerRoute): SpeechRecognizer? = recognizers[r] ?: runCatching {
         when (r) {
@@ -520,19 +542,25 @@ class AndroidSpeechInput(private val context: Context) : SpeechInput {
 
         override fun onEndOfSpeech() {
             if (!live) return
+            val now = SystemClock.uptimeMillis()
+            Log.i(TAG, "timing: end of speech at ${now - startedAt} ms, ${if (lastPartialAt > 0) now - lastPartialAt else -1} ms after the last partial")
             setState(ListenState.PROCESSING)
             _level.value = 0f
         }
 
         override fun onPartialResults(partialResults: Bundle?) {
             if (!live) return
-            first(partialResults)?.let { _partial.value = it }
+            first(partialResults)?.let {
+                if (it != _partial.value) lastPartialAt = SystemClock.uptimeMillis()
+                _partial.value = it
+            }
         }
 
         override fun onResults(results: Bundle?) {
             if (!live) return
             session++ // Done: a late error from this utterance is ignored.
             _level.value = 0f
+            Log.i(TAG, "timing: final words at ${SystemClock.uptimeMillis() - startedAt} ms (same as the last partial: ${first(results) == _partial.value})")
             // This route and language work: no need to ask again.
             if (plan == null) plan = LanguagePlan(LanguagePlan.Kind.READY, language, route).also { Log.i(TAG, "working plan: $it") }
             val text = first(results) ?: _partial.value.ifBlank { null }
@@ -750,8 +778,28 @@ class AndroidSpeechOutput(context: Context) : SpeechOutput {
             return
         }
         _progress.value = SpeechProgress(id, sentences, -1, speaking = true)
+        queuedAt = SystemClock.uptimeMillis()
         sentences.forEachIndexed { i, sentence ->
             tts.speak(sentence, if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "$s#$i")
+        }
+    }
+
+    override fun append(text: String, id: String) {
+        synchronized(this) {
+            val more = Sentences.split(text)
+            if (more.isEmpty()) return
+            if (!ready) {
+                val joined = pending?.takeIf { it.second == id }?.let { "${it.first} $text" } ?: text
+                speak(joined, id)
+                return
+            }
+            val p = _progress.value
+            if (p.id != id) {
+                enqueue(text, id)
+                return
+            }
+            _progress.value = p.copy(sentences = p.sentences + more, speaking = true)
+            more.forEachIndexed { k, sentence -> tts.speak(sentence, TextToSpeech.QUEUE_ADD, null, "$session#${p.sentences.size + k}") }
         }
     }
 
@@ -778,6 +826,10 @@ class AndroidSpeechOutput(context: Context) : SpeechOutput {
         AudioFocus.drop(appContext, "speak")
     }
 
+    /** When the reply in progress was queued (uptime ms): its first sound is logged against it. */
+    @Volatile
+    private var queuedAt = 0L
+
     /** (session, sentence) of an utterance id, or null if it belongs to an older [speak]. */
     private fun parse(utteranceId: String?): Int? {
         val (s, i) = utteranceId?.split('#')?.takeIf { it.size == 2 } ?: return null
@@ -789,6 +841,7 @@ class AndroidSpeechOutput(context: Context) : SpeechOutput {
             val i = parse(utteranceId) ?: return
             synchronized(this@AndroidSpeechOutput) {
                 if (parse(utteranceId) == null) return
+                if (i == 0) Log.i(TAG, "timing: first sentence sounds ${SystemClock.uptimeMillis() - queuedAt} ms after it was queued")
                 _progress.value = _progress.value.copy(index = i, speaking = true)
                 // Media ducks only while the voice is heard, not while the engine synthesises the first sentence.
                 AudioFocus.hold(appContext, "speak")
@@ -808,8 +861,11 @@ class AndroidSpeechOutput(context: Context) : SpeechOutput {
         }
 
         override fun onDone(utteranceId: String?) {
-            val i = parse(utteranceId) ?: return
-            if (i >= _progress.value.sentences.lastIndex) finish()
+            // Under the lock: a sentence [append]ed meanwhile isn't cut off.
+            synchronized(this@AndroidSpeechOutput) {
+                val i = parse(utteranceId) ?: return
+                if (i >= _progress.value.sentences.lastIndex) finish()
+            }
         }
 
         @Deprecated("Deprecated in Java")

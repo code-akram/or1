@@ -269,7 +269,7 @@ object ResultCards {
     }
 
     /** Calls whose result is a screen read (`Foreground: <pkg>. Screen …`). */
-    private val SCREEN_TOOLS = setOf("open", "act", "screen")
+    private val SCREEN_TOOLS = setOf("open", "act", "screen", "email")
 
     /** The tool of a raw call ("contacts action=find query=Sam" → "contacts"). */
     fun callTool(detail: String): String = detail.substringBefore(' ')

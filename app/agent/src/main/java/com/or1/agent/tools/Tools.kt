@@ -18,6 +18,7 @@ class Tools(context: Context) {
     internal val calendar = CalendarTool(context)
     internal val contacts = ContactsTool(context)
     private val media = MediaTool(context)
+    private val email = EmailTool(system)
 
     fun elementLabel(id: Int): String = screen.labelOf(id)
 
@@ -47,6 +48,7 @@ class Tools(context: Context) {
         "contacts" -> contacts.run(args)
         "routines" -> com.or1.agent.Routines.tool(args)
         "media" -> media.run(args, screen)
+        "email" -> email.run(args, screen)
         else -> throw IllegalArgumentException("Unknown tool '$name'.")
     }
 }

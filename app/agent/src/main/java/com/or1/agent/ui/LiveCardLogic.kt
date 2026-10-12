@@ -130,6 +130,43 @@ object CalendarDays {
 
 // --- Email -----------------------------------------------------------------------------------------------------------
 
+/**
+ * A conversation in Gmail's inbox list: the row's element number ([id], to tap it), sender (with the message count),
+ * time, subject and first words.
+ */
+data class InboxRow(val id: Int, val from: String, val time: String, val subject: String, val snippet: String, val unread: Boolean) {
+    fun line() = listOfNotNull(if (unread) "unread" else null, from, time).joinToString(" · ") + ": " + subject +
+        (if (snippet.isNotBlank()) " — $snippet" else "")
+}
+
+/**
+ * Reads Gmail's inbox list from a `screen` result: each conversation is a clickable row ("Unread, Google, 2 messages,
+ * Security alert, …") followed by its contact image, then sender, time, subject and snippet. Rows cut off at the bottom
+ * of the screen (no subject) are left out. Empty when the screen isn't the list.
+ */
+object InboxReads {
+    private val COUNT = Regex("^(.*?)\\s{2,}(\\d+)$")
+
+    fun parse(result: String): List<InboxRow> {
+        val dump = ScreenDump.parse(result) ?: return emptyList()
+        if (dump.pkg != EmailReads.GMAIL || dump.elements.none { it.label == "Thread list view" }) return emptyList()
+        val els = dump.elements
+        val rows = mutableListOf<InboxRow>()
+        for (i in els.indices) {
+            val row = els[i]
+            if ("click" !in row.flags || ", " !in row.label || els.getOrNull(i + 1)?.label != "Contact image") continue
+            val texts = els.drop(i + 2).takeWhile { it.cls == "TextView" }.map { it.label.trim() }
+            val time = texts.firstOrNull { EmailReads.TIME.matches(it) } ?: continue
+            val rest = texts.filter { it !== time }
+            val sender = rest.getOrNull(0) ?: continue
+            val subject = rest.getOrNull(1) ?: continue
+            val from = COUNT.matchEntire(sender)?.let { "${it.groupValues[1]} (${it.groupValues[2]} messages)" } ?: sender
+            rows += InboxRow(row.id, from, time, subject, rest.getOrNull(2).orEmpty(), row.label.startsWith("Unread,"))
+        }
+        return rows
+    }
+}
+
 /** An email open in Gmail on the work display, as read off its screen. [quote] may be empty. */
 data class EmailRead(val from: String, val subject: String, val quote: String)
 
@@ -155,7 +192,7 @@ object EmailReads {
     )
     /** Gmail's system labels, shown as a chip after the subject. */
     private val LABELS = setOf("inbox", "important", "primary", "updates", "promotions", "social", "forums", "spam", "sent", "starred", "drafts", "all mail")
-    private val TIME = Regex(
+    internal val TIME = Regex(
         "^(\\d{1,2}:\\d{2}( ?[AaPp]\\.?[Mm]\\.?)?|\\d{1,2} [A-Z][a-z]{2}( \\d{4})?|[A-Z][a-z]{2} \\d{1,2}(, \\d{4})?|Yesterday|Today|" +
             "\\d+ (min|mins|minutes|hour|hours|day|days) ago|\\d{1,2}/\\d{1,2}/\\d{2,4})( \\(.*\\))?$",
     )

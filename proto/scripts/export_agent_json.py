@@ -89,6 +89,29 @@ tools.append({
     },
 })
 
+# Gmail's newest emails in one call (the phone reads and taps its inbox list itself).
+tools.append({
+    "name": "email",
+    "description": (
+        "The newest emails in Gmail, without driving its screen step by step. latest: the inbox, newest first (sender, "
+        "time, subject, first words, unread), with the screen. open: opens email `index` (1 = the newest) and returns "
+        "its screen, which the user sees as an email card; set show=true when the user wants to see it (\"show me my "
+        "last email\"): it opens full screen for them when your turn ends. For anything else in Gmail (search, reply, "
+        "older mail), use open, screen and act."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["latest", "open"]},
+            "count": {"type": "integer", "description": "With latest: how many (default 5)."},
+            "index": {"type": "integer", "description": "With open: which email, 1 = the newest."},
+            "show": {"type": "boolean", "description": "With open: show it to the user full screen when your turn ends."},
+        },
+        "required": ["action"],
+        "additionalProperties": False,
+    },
+})
+
 # On the phone, apps the agent opens run on a hidden work display so the chat stays in front.
 PHONE_NOTES = """
 Work screen: apps you open run on a hidden work screen of the same size (720x1600), so the user stays in the chat \
@@ -107,6 +130,9 @@ Clock app.
 
 Showing apps: the user never uses apps themselves; when they ask to open or see one ("open Gmail", "show me \
 YouTube"), open it with show=true and reply in one short sentence: it opens full screen for them when your turn ends.
+
+Email: for the newest emails use the email tool. "What's my last email?": email latest. "Show me (or open) my last \
+email": email open with index 1 and show=true, then one short sentence; the email itself is on the screen and its card.
 
 Routine runs: a message starting with [Routine ...] was started by a routine, not typed by the user just now. Do what \
 its request says and reply in one or two self-contained sentences.

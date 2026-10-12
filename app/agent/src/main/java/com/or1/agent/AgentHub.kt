@@ -72,6 +72,9 @@ object AgentHub {
     private const val NETWORK_WAIT_MS = 2 * 60_000L
     private const val RETRY_DELAY_MS = 30_000L
     private const val WAKE_SCREEN_AFTER_MS = 15_000L
+    /** A connection used this recently is still open: [warm] has nothing to do. */
+    private const val WARM_FRESH_MS = 20_000L
+    private const val WARM_UP_AFTER_MS = 4_000L
     private val ids = AtomicLong()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val lock = Mutex()
@@ -203,6 +206,7 @@ object AgentHub {
         }
         NowState.init(appContext)
         scope.launch { rebindAccessibility() }
+        scope.launch(Dispatchers.IO) { warmUp() }
     }
 
     /**
@@ -293,10 +297,12 @@ object AgentHub {
      * Queue a user message. `requestId` makes the reply readable from replies.jsonl (debug driver). `context` goes to
      * the model after the text but isn't shown in the chat (an undo's receipt); `done` gets whether the request failed
      * or was stopped. `spoken`: the request was spoken and its reply will be read aloud (a short reply, see [Agent.send]).
+     * `gate`: sent before its words were final (voice mode's end of speech); see [Agent.send]. When it says the words
+     * changed, the request leaves the chat and `done` gets true.
      */
     fun submit(
         text: String, requestId: String? = null, fresh: Boolean = false, context: String? = null, spoken: Boolean = false,
-        done: ((Boolean) -> Unit)? = null,
+        gate: (suspend () -> Boolean)? = null, done: ((Boolean) -> Unit)? = null,
     ) {
         if (_routineBusy.value) _items.update { it + ChatItem.Info(ids.incrementAndGet(), "A routine is running. Your request starts when it's done.") }
         scope.launch {
@@ -313,14 +319,21 @@ object AgentHub {
                         newConversation()
                         add(ChatItem.Info(ids.incrementAndGet(), "New chat: the last message was over an hour ago. The earlier one is in the menu."))
                     }
-                    add(ChatItem.User(ids.incrementAndGet(), text))
+                    val userId = ids.incrementAndGet()
+                    add(ChatItem.User(userId, text))
                     val a = agent()
                     effectSource = Triple(if (requestId != null) "eval" else "chat", a.transcriptFile.nameWithoutExtension, null)
                     val outcome = try {
-                        run(if (context != null) "$text\n\n$context" else text, a, _busy, spoken)
+                        run(if (context != null) "$text\n\n$context" else text, a, _busy, spoken, gate, local = spoken && context == null)
                     } finally {
                         lastChatEnd = System.currentTimeMillis()
                         lastRequestEnd = lastChatEnd
+                    }
+                    if (outcome.superseded) {
+                        // Replaced by the final words, which voice mode sends next: no trace in the chat.
+                        _items.update { list -> list.filter { it.id < userId } }
+                        HiddenDisplay.showAfterTurn = null
+                        return@withLock
                     }
                     ok = !outcome.failed && !outcome.stopped
                     requestId?.let { recordReply(it, outcome.reply, outcome.cost, outcome.requests, outcome.seconds) }
@@ -412,9 +425,13 @@ object AgentHub {
         }
     }
 
-    /** `failed`: the request errored (API or network), as opposed to finishing or being stopped. */
+    /**
+     * `failed`: the request errored (API or network), as opposed to finishing or being stopped. `superseded`: dropped
+     * for the final words ([Superseded]).
+     */
     private data class Outcome(
         val reply: String, val cost: Double, val requests: Int, val seconds: Double, val failed: Boolean = false, val stopped: Boolean = false,
+        val superseded: Boolean = false,
     )
 
     /**
@@ -448,8 +465,14 @@ object AgentHub {
         }
     }
 
-    /** One request through [a]; the caller holds [lock] and has added the user item. */
-    private suspend fun run(text: String, a: Agent, busy: MutableStateFlow<Boolean>, spoken: Boolean = false): Outcome {
+    /**
+     * One request through [a]; the caller holds [lock] and has added the user item. [local]: a simple command
+     * ([LocalCommands]) is done here without the model.
+     */
+    private suspend fun run(
+        text: String, a: Agent, busy: MutableStateFlow<Boolean>, spoken: Boolean = false, gate: (suspend () -> Boolean)? = null,
+        local: Boolean = false,
+    ): Outcome {
         framesThisAct = 0
         // A song or video from the last request moves to the stage first, so this one can't cover (and stop) it.
         Stage.beforeRequest()
@@ -465,12 +488,17 @@ object AgentHub {
             val before = a.usage.cost
             val beforeRequests = a.usage.requests
             try {
-                a.send(text, spoken)
+                (if (local) runLocal(text, a, gate) else null) ?: a.send(text, spoken, gate)
             } finally {
                 cost = a.usage.cost - before
                 requests = a.usage.requests - beforeRequests
                 _totalCost.value = spentBefore + (agent?.usage?.cost ?: 0.0) + (routineAgent?.usage?.cost ?: 0.0)
             }
+        } catch (e: Superseded) {
+            clearDraft()
+            busy.value = false
+            lastApiUse = android.os.SystemClock.elapsedRealtime()
+            return Outcome("", cost, requests, 0.0, superseded = true)
         } catch (e: CancellationException) {
             stopped = true
             "[Stopped.]"
@@ -484,6 +512,7 @@ object AgentHub {
             "[Error: ${e.message ?: e.javaClass.simpleName}]"
         }
         val seconds = (System.currentTimeMillis() - started) / 1000.0
+        if (requests > 0) lastApiUse = android.os.SystemClock.elapsedRealtime()
         clearDraft()
         add(ChatItem.Reply(ids.incrementAndGet(), reply, cost, seconds))
         busy.value = false
@@ -492,6 +521,151 @@ object AgentHub {
 
     fun stop() {
         current?.cancel()
+    }
+
+    // --- Simple commands without the model (LocalCommands) ----------------------------------------------------------
+
+    /**
+     * Does [text] here if it's one of [LocalCommands]: its tool call shows as a step (with its receipt and card), the
+     * reply is said, and both join [a]'s conversation. Null when it isn't one, or its call failed (the model takes it).
+     * With a [gate], waits for the final words first: a command runs at once, before anything could stop it.
+     */
+    private suspend fun runLocal(text: String, a: Agent, gate: (suspend () -> Boolean)?): String? {
+        val command = runCatching { LocalCommands.match(text, ::appFor) }.onFailure { Log.w(TAG, "local match", it) }.getOrNull() ?: return null
+        if (gate != null && !gate()) throw Superseded()
+        val call = when (command) {
+            is LocalCommands.Answer -> {
+                val reply = answer(command.kind)
+                Log.i(TAG, "local: $text -> $reply")
+                a.addLocal(text, "", null, null, reply)
+                return reply
+            }
+            is LocalCommands.Volume -> volumeCall(command)
+            is LocalCommands.Call -> command
+        }
+        Log.i(TAG, "local: $text -> ${call.tool} ${call.args}")
+        hooks.toolCall(call.tool, call.args)
+        val output = try {
+            tools.run(call.tool, call.args)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            hooks.toolResult(call.tool, "Error: ${e.message ?: e.javaClass.simpleName}", true)
+            Log.w(TAG, "local ${call.tool} failed: the model takes it", e)
+            return null
+        }
+        hooks.toolResult(call.tool, output.text, false)
+        hooks.toolDone(call.tool, call.args, output)
+        val reply = runCatching { call.reply(output.text) }.getOrNull() ?: output.text.lineSequence().first().trim()
+        a.addLocal(text, call.tool, call.args, output.text, reply)
+        return reply
+    }
+
+    private fun answer(kind: LocalCommands.Answer.Kind): String {
+        val now = java.util.Date()
+        return when (kind) {
+            LocalCommands.Answer.Kind.TIME -> "It's ${android.text.format.DateFormat.getTimeFormat(appContext).format(now)}."
+            LocalCommands.Answer.Kind.DATE -> "It's ${java.text.SimpleDateFormat("EEEE d MMMM", java.util.Locale.US).format(now)}."
+        }
+    }
+
+    /** The `device set volume` call for a volume command, from the media volume now. */
+    private fun volumeCall(v: LocalCommands.Volume): LocalCommands.Call {
+        val am = appContext.getSystemService(android.media.AudioManager::class.java)
+        val max = am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+        val now = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+        val step = (max + 7) / 8
+        val target = (v.level ?: v.percent?.let { (it * max + 50) / 100 } ?: (now + v.steps * step)).coerceIn(0, max)
+        val args = JSONObject().put("action", "set").put("setting", "volume").put("value", target.toString())
+        return LocalCommands.Call("device", args) { r -> if ("already" in r) "The volume is already $target of $max." else "Volume $target of $max." }
+    }
+
+    /** The launchable app a spoken name means ("youtube", "the clock", "you tube"): one package, or null. */
+    private fun appFor(name: String): String? {
+        fun key(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
+        val wanted = key(name).ifEmpty { return null }
+        val apps = launcherApps()
+        apps.filter { key(it.second) == wanted }.map { it.first }.distinct().singleOrNull()?.let { return it }
+        return apps.filter { key(it.second).startsWith(wanted) && wanted.length >= 4 }.map { it.first }.distinct().singleOrNull()
+    }
+
+    @Volatile
+    private var launcherCache: Pair<Long, List<Pair<String, String>>>? = null
+
+    /** (package, label) of every launchable app but or1, cached for a minute. */
+    private fun launcherApps(): List<Pair<String, String>> {
+        val now = android.os.SystemClock.elapsedRealtime()
+        launcherCache?.takeIf { now - it.first < 60_000 }?.let { return it.second }
+        val pm = appContext.packageManager
+        val main = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val list = pm.queryIntentActivities(main, 0).map { it.activityInfo.packageName to it.loadLabel(pm).toString() }
+            .filter { it.first != appContext.packageName }
+        launcherCache = now to list
+        return list
+    }
+
+    // --- The API connection ----------------------------------------------------------------------------------------
+
+    /** When a request last used the API (elapsedRealtime ms). */
+    @Volatile
+    private var lastApiUse = 0L
+
+    /**
+     * Opens the API connection ahead of a request, unless one was used in the last [WARM_FRESH_MS]: voice mode calls
+     * it when it starts listening, so the request doesn't wait for the connection. A cheap call (the models list) on
+     * the same client; its connection stays in the pool for the request.
+     */
+    fun warm() {
+        if (!::appContext.isInitialized) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastApiUse < WARM_FRESH_MS || _busy.value) return
+        lastApiUse = now
+        scope.launch(Dispatchers.IO) {
+            val started = android.os.SystemClock.elapsedRealtime()
+            runCatching { client.models().list(com.anthropic.models.models.ModelListParams.builder().limit(1).build()) }
+                .onSuccess { Log.i(TAG, "warm: connection ready in ${android.os.SystemClock.elapsedRealtime() - started} ms") }
+                .onFailure { Log.w(TAG, "warm failed", it) }
+            lastApiUse = android.os.SystemClock.elapsedRealtime()
+        }
+    }
+
+    /**
+     * After start, once the phone has settled: the SDK's first-use cost ([warmUpSdk]) and the client with a connection,
+     * so the first request (often spoken, with the user waiting) doesn't pay them.
+     */
+    private suspend fun warmUp() {
+        delay(WARM_UP_AFTER_MS)
+        val started = android.os.SystemClock.elapsedRealtime()
+        val offline = runCatching { warmUpSdk(AgentConfig.load(appContext)) }.onFailure { Log.w(TAG, "SDK warm-up", it) }
+        val sdk = android.os.SystemClock.elapsedRealtime() - started
+        if (offline.isSuccess) warm()
+        Log.i(TAG, "warm-up: SDK models ready in $sdk ms")
+    }
+
+    /**
+     * Debug (`--es net probe`): where a cold request's time goes. DNS, a bare TLS handshake, then the models list
+     * twice through the client (cold, then on the open connection).
+     */
+    suspend fun probeNetwork(): String = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        fun ms(block: () -> Unit): String {
+            val t = android.os.SystemClock.elapsedRealtime()
+            return runCatching { block(); "${android.os.SystemClock.elapsedRealtime() - t} ms" }.getOrElse { "failed: $it" }
+        }
+        val host = "api.anthropic.com"
+        val idle = if (lastApiUse == 0L) "never" else "${(android.os.SystemClock.elapsedRealtime() - lastApiUse) / 1000} s"
+        val dns = ms { java.net.InetAddress.getAllByName(host) }
+        val addresses = runCatching { java.net.InetAddress.getAllByName(host).joinToString { it.hostAddress ?: "?" } }.getOrDefault("?")
+        val tls = ms {
+            (javax.net.ssl.SSLSocketFactory.getDefault().createSocket() as javax.net.ssl.SSLSocket).use { socket ->
+                socket.connect(java.net.InetSocketAddress(host, 443), 10_000)
+                socket.startHandshake()
+            }
+        }
+        val list = { client.models().list(com.anthropic.models.models.ModelListParams.builder().limit(1).build()); Unit }
+        val cold = ms(list)
+        val warm = ms(list)
+        lastApiUse = android.os.SystemClock.elapsedRealtime()
+        "net: idle=$idle dns=$dns ($addresses) tls=$tls client_first=$cold client_again=$warm"
     }
 
     /** The user started using the work screen while or1 was working on it: stop, and say so in the chat. */

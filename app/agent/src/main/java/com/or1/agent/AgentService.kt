@@ -64,6 +64,8 @@ class AgentService : Service() {
  * languages (installed, downloading, downloadable, online) and the plan it picks; `--es voice download` triggers the
  * language model download on each recogniser that hasn't got it (progress in logcat on API 34). `--es now dump` writes the Now state ([NowState]) to files/now.txt (tag or1-now).
  *
+ * `--es net probe` times DNS, a TLS handshake and two API calls (files/net.txt, tag or1): where a cold request waits.
+ *
  * Hidden display checks: `--es display info|create|launch|tap|back|home|park|keep|restore|focus|snap|front|move|tool [--es name N --es args JSON] [--es pkg P] [--ei x X --ei y Y]
  * [--ei task T]`; results go to logcat (tag or1-display) and files/display.txt.
  */
@@ -73,6 +75,14 @@ class DebugReceiver : BroadcastReceiver() {
         intent.getStringExtra("display")?.let { displayCommand(context, it, intent); return }
         intent.getStringExtra("voice")?.let { voiceCommand(context.applicationContext, it); return }
         intent.getStringExtra("now")?.let { writeNow(context); return }
+        intent.getStringExtra("net")?.let {
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
+                val result = runCatching { AgentHub.probeNetwork() }.getOrElse { "net: error $it" }
+                android.util.Log.i("or1", result)
+                java.io.File(context.filesDir, "net.txt").writeText(result + "\n")
+            }
+            return
+        }
         intent.getStringExtra("routine")?.let { Routines.fire(it); return }
         if (intent.getBooleanExtra("stop", false)) { AgentHub.stop(); return }
         intent.getStringExtra("lockdown")?.let { Lockdown.setEnabled(it != "off"); return }

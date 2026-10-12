@@ -73,6 +73,9 @@ import com.or1.agent.VoiceEngines
 import com.or1.agent.VoiceError
 import com.or1.agent.tools.HiddenDisplay
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -299,7 +302,11 @@ private enum class Phase { LISTENING, WORKING, SPEAKING }
 
 /** What one listen produced. */
 private sealed interface Heard {
-    data class Words(val text: String) : Heard
+    /**
+     * [final]: [text] is the recogniser's last partial, taken at the end of speech; its final words come later (null if
+     * it gave none). [endedAt]: when speech ended (uptime ms), for the timing log.
+     */
+    data class Words(val text: String, val final: Deferred<String?>? = null, val endedAt: Long = SystemClock.uptimeMillis()) : Heard
     /** No match, a timeout, or stopped with nothing heard. */
     data object NoWords : Heard
     data class Problem(val message: String) : Heard
@@ -314,6 +321,28 @@ private const val SPEECH_LEVEL = 0.45f
 
 /** Voice mode ends after this long without words (silence, no match, or no recogniser). */
 private const val QUIET_MS = 8_000L
+
+/** A pause this long ends what the user says (asked of the recogniser; its own default is longer). */
+private const val END_SILENCE_MS = 800L
+
+/** How long after the end of speech the recogniser's final words may take; past it, the last partial stands. */
+private const val FINAL_WAIT_MS = 5_000L
+
+/** Reply sentences spoken as they arrive, before the turn is over (the spoken summary keeps two; see [spokenSummary]). */
+private const val STREAM_SENTENCES = 2
+
+/** What's left of the spoken summary once some of its sentences were said as the reply streamed in. */
+internal object SpokenSoFar {
+    private fun key(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
+
+    fun rest(summary: List<String>, said: List<String>): List<String> {
+        val done = said.map(::key).toMutableList()
+        return summary.filter { s -> !done.remove(key(s)) }
+    }
+
+    /** The recogniser's final words say the same as its last partial (case, punctuation and spacing aside). */
+    fun same(a: String, b: String) = key(a) == key(b)
+}
 
 /**
  * Hands-free: listen → ask or1 → speak the reply ([spokenSummary]) → listen again, until Stop or [QUIET_MS] without
@@ -358,32 +387,39 @@ private fun VoiceMode(onClose: () -> Unit, first: String?) {
         var echo: String? = null
         while (true) {
             phase = Phase.LISTENING
-            val h = pending?.let { Heard.Words(it) } ?: listen(input, output, quietSince, echo.orEmpty())
+            val h = pending?.let { Heard.Words(it) } ?: listen(this, input, output, quietSince, echo.orEmpty())
             pending = null
             echo = null
             when (h) {
                 is Heard.Words -> {
-                    Log.i(VOICE_TAG, "voice mode heard: ${h.text}")
+                    Log.i(VOICE_TAG, "voice mode heard: ${h.text}${if (h.final != null) " (the last partial, at the end of speech)" else ""}")
                     problem = null
                     heard = h.text
                     turnKey = null
                     phase = Phase.WORKING
                     val startsBefore = Stage.starts.value
-                    val turn = ask(h.text)
-                    turnKey = turn?.key
-                    val id = "voice-${turn?.key ?: SystemClock.uptimeMillis()}"
+                    // One id for the turn: its reply's sentences are spoken as they arrive, then the rest of the summary.
+                    val id = "voice-${SystemClock.uptimeMillis()}"
                     replyId = id
+                    val streamed = mutableListOf<String>()
+                    val turn = ask(h, output, id, streamed) { heard = it }
+                    turnKey = turn?.key
                     phase = Phase.SPEAKING
                     // The turn started a song or video: the user wants to hear it, not a microphone open over it (the
                     // recogniser would hear the media too), nor a long reply over its start. Say one sentence without
                     // barge-in, then close.
                     val media = turnStartedMedia(startsBefore)
                     val summary = turn?.let(::spokenSummary) ?: "Sorry, that didn't work."
-                    val said = if (media) Sentences.split(summary).firstOrNull() ?: summary else summary
-                    Log.i(VOICE_TAG, "voice mode says: $said")
-                    say(output, input, said, id, bargeIn = !media) { silentReply = it }?.let { barged ->
-                        echo = said
-                        pending = barged.text?.let { WakePhrase.strip(Barge.userPart(it, said)) }?.ifBlank { null }
+                    val said = when {
+                        media && streamed.isNotEmpty() -> ""
+                        media -> Sentences.split(summary).firstOrNull() ?: summary
+                        else -> SpokenSoFar.rest(Sentences.split(summary), streamed).joinToString(" ")
+                    }
+                    Log.i(VOICE_TAG, "voice mode says: ${(streamed + said).filter { it.isNotBlank() }.joinToString(" ")}")
+                    val whole = (streamed + said).joinToString(" ")
+                    say(output, input, said, id, bargeIn = !media, append = streamed.isNotEmpty()) { silentReply = it?.let { whole } }?.let { barged ->
+                        echo = whole
+                        pending = barged.text?.let { WakePhrase.strip(Barge.userPart(it, whole)) }?.ifBlank { null }
                     }
                     if (media && pending == null) {
                         Log.i(VOICE_TAG, "voice mode closes: the turn started media")
@@ -554,11 +590,13 @@ private fun StatusLine(input: SpeechInput, phase: Phase, problem: String?) {
  * Listens once (or carries on with an utterance already under way: push-to-talk handed over by the composer, the wake
  * phrase, a barge-in). The words lose an [echo] of what or1 was saying and the wake phrase.
  */
-private suspend fun listen(input: SpeechInput, output: SpeechOutput, quietSince: Long, echo: String): Heard {
+private suspend fun listen(scope: CoroutineScope, input: SpeechInput, output: SpeechOutput, quietSince: Long, echo: String): Heard {
     if (input.state.value == ListenState.IDLE || input.state.value == ListenState.ERROR) {
         output.stop()
-        input.start()
+        input.start(endSilenceMs = END_SILENCE_MS)
     }
+    // The request follows: open the API connection while the user talks.
+    AgentHub.warm()
     val left = QUIET_MS - (SystemClock.uptimeMillis() - quietSince)
     // Words, or a voice-level sound (the recogniser's partials come a second or so after speech starts): someone
     // talking just before the quiet time is up isn't cut off.
@@ -570,23 +608,128 @@ private suspend fun listen(input: SpeechInput, output: SpeechOutput, quietSince:
         return Heard.Quiet
     }
     val done: suspend () -> Boolean = { input.state.first { it == ListenState.IDLE || it == ListenState.ERROR }; true }
-    if (withTimeoutOrNull(30_000) { done() } == null) {
-        input.stop()
-        if (withTimeoutOrNull(5_000) { done() } == null) input.cancel()
+    val clean = { words: String -> WakePhrase.strip(Barge.userPart(words, echo)).ifBlank { null } }
+    if (withTimeoutOrNull(30_000) { input.state.first { it != ListenState.LISTENING } } == null) input.stop()
+    // The end of speech: the recogniser takes a moment more for its final words. The last partial goes now, and the
+    // final words confirm it before the request does anything (see ask).
+    val endedAt = SystemClock.uptimeMillis()
+    val early = input.partial.value.let(clean)
+    if (input.state.value == ListenState.PROCESSING && early != null) {
+        val final = scope.async {
+            if (withTimeoutOrNull(FINAL_WAIT_MS) { done() } == null) input.cancel()
+            input.result.value?.let(clean)
+        }
+        return Heard.Words(early, final, endedAt)
     }
-    val text = input.result.value?.let { WakePhrase.strip(Barge.userPart(it, echo)) }?.ifBlank { null }
-    if (text != null && input.state.value == ListenState.IDLE) return Heard.Words(text)
+    if (withTimeoutOrNull(5_000) { done() } == null) input.cancel()
+    val text = input.result.value?.let(clean)
+    if (text != null && input.state.value == ListenState.IDLE) return Heard.Words(text, endedAt = endedAt)
     val e = input.error.value
     return if (e == null || e.kind == VoiceError.Kind.NO_MATCH || e.kind == VoiceError.Kind.TIMEOUT) Heard.NoWords else Heard.Problem(e.message)
 }
 
-/** Sends [text] to or1 and waits for the turn to finish; the turn, or null if it can't be found. */
-private suspend fun ask(text: String): Turn? {
-    val mark = AgentHub.items.value.maxOfOrNull { it.id } ?: 0L
+/**
+ * Sends what was heard to or1 and waits for the turn to finish; the turn, or null if it can't be found. The reply's
+ * sentences are spoken into [id] as they arrive (up to [STREAM_SENTENCES], listed in [streamed]). Words taken at the end
+ * of speech ([Heard.Words.final]) go at once; if the final words differ, that request is dropped before it does
+ * anything and the final words are sent instead ([onFinal] gets them).
+ */
+private suspend fun ask(h: Heard.Words, output: SpeechOutput, id: String, streamed: MutableList<String>, onFinal: (String) -> Unit): Turn? = coroutineScope {
+    var text = h.text
+    var mark = AgentHub.items.value.maxOfOrNull { it.id } ?: 0L
+    val timing = VoiceTiming(h.endedAt)
+    // Not cancelled with the turn: the first sound may come after it, from the summary.
+    VoiceTiming.watch(output, id, h.endedAt)
+    // Whether the early words stand: once the final words are in.
+    val confirmed = CompletableDeferred<Boolean>()
+    val final = h.final
+    if (final == null) confirmed.complete(true) else launch {
+        val words = final.await()
+        timing.final(words, h.text)
+        confirmed.complete(words == null || SpokenSoFar.same(words, h.text))
+    }
+    var streaming = launch { if (confirmed.await()) streamSpeech(output, id, mark, streamed) }
     val done = CompletableDeferred<Unit>()
-    AgentHub.submit(text, spoken = true, done = { done.complete(Unit) })
+    val gate: (suspend () -> Boolean)? = if (final != null) ({ confirmed.await() }) else null
+    AgentHub.submit(text, spoken = true, gate = gate, done = { done.complete(Unit) })
     done.await()
-    return groupTurns(AgentHub.items.value).lastOrNull { (it.user?.id ?: -1) > mark && it.user?.text == text }
+    if (!confirmed.await()) {
+        text = final!!.await()!!
+        Log.i(VOICE_TAG, "voice mode: the final words differ, sending them instead: $text")
+        onFinal(text)
+        streaming.cancel()
+        mark = AgentHub.items.value.maxOfOrNull { it.id } ?: 0L
+        streaming = launch { streamSpeech(output, id, mark, streamed) }
+        val again = CompletableDeferred<Unit>()
+        AgentHub.submit(text, spoken = true, done = { again.complete(Unit) })
+        again.await()
+    }
+    streaming.cancel()
+    timing.done()
+    groupTurns(AgentHub.items.value).lastOrNull { (it.user?.id ?: -1) > mark && it.user?.text == text }
+}
+
+/**
+ * Speaks the turn's reply as it streams in: each sentence once the next one has begun, and the rest as soon as the
+ * reply is complete (before the turn's wind-down), up to [STREAM_SENTENCES]. Only items after [mark] (this turn's).
+ * A preamble before a tool call ("Let me check.") rarely has a finished sentence before the call, so it stays unsaid.
+ */
+private suspend fun streamSpeech(output: SpeechOutput, id: String, mark: Long, streamed: MutableList<String>) {
+    if (!output.available.value) return
+    var draftId = -1L
+    var taken = 0
+    AgentHub.items.first { items ->
+        val reply = items.lastOrNull { it is ChatItem.Reply && it.id > mark } as ChatItem.Reply?
+        val draft = items.lastOrNull { it is ChatItem.Draft && it.id > mark } as ChatItem.Draft?
+        val sentences = when {
+            // A note in brackets ("[Stopped.]") is said by the summary, if at all.
+            reply != null -> if (reply.text.trimStart().startsWith("[")) emptyList() else Sentences.split(Speakable.tidy(reply.text))
+            draft != null -> {
+                if (draft.id != draftId) {
+                    draftId = draft.id
+                    taken = 0
+                }
+                Sentences.split(Speakable.tidy(draft.text)).dropLast(1)
+            }
+            else -> emptyList()
+        }
+        // The reply is the last draft completed: what was said from it isn't said again.
+        val next = if (reply != null) SpokenSoFar.rest(sentences, streamed) else sentences.drop(taken)
+        for (s in next) {
+            if (streamed.size >= STREAM_SENTENCES) break
+            streamed += s
+            output.append(s, id)
+            taken++
+        }
+        reply != null || streamed.size >= STREAM_SENTENCES
+    }
+}
+
+/** Lines per voice turn in logcat (tag or1-voice): from the end of speech to the final words, the turn's end and the first sound. */
+private class VoiceTiming(private val endedAt: Long) {
+    private var finalMs = -1L
+    private var same: Boolean? = null
+
+    fun final(words: String?, early: String) {
+        finalMs = SystemClock.uptimeMillis() - endedAt
+        same = words?.let { SpokenSoFar.same(it, early) }
+    }
+
+    fun done() {
+        Log.i(VOICE_TAG, "timing: final words +$finalMs ms (same as sent: $same), turn done +${SystemClock.uptimeMillis() - endedAt} ms after the end of speech")
+    }
+
+    companion object {
+        private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default)
+
+        /** Logs when reply [id] first sounds (given up after a minute). */
+        fun watch(output: SpeechOutput, id: String, endedAt: Long) {
+            scope.launch {
+                withTimeoutOrNull(60_000) { output.progress.first { it.id == id && it.index >= 0 } } ?: return@launch
+                Log.i(VOICE_TAG, "timing: first sound +${SystemClock.uptimeMillis() - endedAt} ms after the end of speech")
+            }
+        }
+    }
 }
 
 /** The user talked over or1: [text] is their finished utterance, or null while the recogniser is still hearing it. */
@@ -615,10 +758,12 @@ private suspend fun turnStartedMedia(startsBefore: Int): Boolean {
 
 /**
  * Speaks [text] to the end, a tap, or a barge-in (returned). Without a TTS engine, shows it for a while instead. While
- * speaking it listens ([bargeIn]); when it ends without one, the listening is dropped.
+ * speaking it listens ([bargeIn]); when it ends without one, the listening is dropped. [append]: reply [id] has begun
+ * (its first sentences were spoken as they streamed in); [text] (possibly empty) goes after them.
  */
 private suspend fun say(
-    output: SpeechOutput, input: SpeechInput, text: String, id: String, bargeIn: Boolean = true, showSilently: (String?) -> Unit,
+    output: SpeechOutput, input: SpeechInput, text: String, id: String, bargeIn: Boolean = true, append: Boolean = false,
+    showSilently: (String?) -> Unit,
 ): Barged? {
     showSilently(null)
     val ready = output.available.value || withTimeoutOrNull(5_000) { output.available.first { it } } != null
@@ -627,7 +772,7 @@ private suspend fun say(
         delay((text.length * 60L).coerceIn(2_000, 8_000))
         return null
     }
-    output.speak(text, id)
+    if (!append) output.speak(text, id) else if (text.isNotBlank()) output.append(text, id)
     var barged: Barged? = null
     coroutineScope {
         val listening = if (bargeIn) launch { bargeIn(input, output, text) { barged = it } } else null

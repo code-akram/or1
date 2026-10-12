@@ -43,6 +43,25 @@ the chat never leaves the screen.
   replies" switch (`VoicePrefs`, shared prefs `ui`, off by default) also speaks chat replies to requests made by voice
   (push-to-talk, or dictated then sent). Hosted by one `VoiceModeHost(open, onClose)` call in `ChatScreen`; Back and
   the `or1` home button close it.
+  - Speed (2026-10-12): the recogniser ends an utterance after an 800 ms pause (`endSilenceMs`; it reports the end
+    0.25-0.55 s after the last partial here). At the end of speech the **last partial is sent at once**
+    (`Heard.Words.final`): the final words follow 0.1-0.4 s later, and the request waits for them (`gate`) before its
+    first tool runs or its reply is returned; if they differ the request is dropped (`Superseded`: gone from the chat,
+    the conversation and past chats) and the final words are sent instead. Listening starts `AgentHub.warm()`. The
+    reply is spoken **as it arrives** (`streamSpeech`: a draft's sentence once the next one has begun, the rest the
+    moment the reply is complete, before the turn winds down; two at most), then whatever of `spokenSummary` wasn't
+    said (`SpokenSoFar.rest`). Logcat `or1-voice` `timing:` lines: end of speech after the last partial, final words,
+    turn done and first sound, all from the end of speech; TTS starts ~0.6 s after a sentence is queued (1-1.7 s while
+    an app draws).
+  - **Simple commands skip the model** (`LocalCommands`, JVM-tested; spoken requests only): open an app ("open
+    YouTube", one launchable app by its label, shown full screen), pause / play / next / previous, volume up, down or to
+    a level or percent, a timer ("5 minutes", "an hour and a half"), stop the timer, an alarm with am/pm or a 24-hour
+    time, Do Not Disturb / Wi-Fi / Bluetooth / dark mode / airplane on or off, the time and the date. The whole request
+    must be one of these; anything more, or in doubt ("an alarm for 7", an app name that fits two apps), goes to the
+    model. `AgentHub.runLocal` runs the tool call as a normal step (its receipt and card, undo), says a short reply and
+    adds the exchange to the conversation as a tool call and result (`Agent.addLocal`), so "make it ten minutes"
+    works. If the call fails, the model takes the request. End of speech to the first sound: ~2-2.5 s (model turns:
+    8-12 s).
 - `ComposerInput.kt`: the text field is a native EditText inside the Compose card, with sentence
   auto-capitalisation. A Compose text field cost ~26 ms per keystroke on this phone (recomposition, the IME's
   cursor-anchor computation, and Compose re-diffing the semantics tree, since the agent's accessibility service is
@@ -126,7 +145,11 @@ the chat never leaves the screen.
   header shows the app in front and three blocks (marching ember while or1 works, steady green on the user's turn). The bottom bar has Back, Apps
   (the work display's home, `WorkHomeActivity`, is an app grid, `AppGrid.kt`; apps open on the same display) and
   "Ask or1" (closes the viewer with the composer open). Its keyboard shows inside it. There's still no moving an app
-  to the real screen (see Lockdown).
+  to the real screen (see Lockdown). While it's open the chat window is not focusable (so typing stays on the work
+  screen), so attaching it puts the viewed display on top (`HiddenDisplay.putOnTop`: re-starts its top task, as
+  `restoreFocus` does for the real screen; `setFocusedTask` does nothing for a display's own top task). Without that,
+  a viewer opened by `open` with show (the real screen still focused after the turn) turned the next key (Back) into
+  an ANR: "Application does not have a focused window".
 - `Theme.kt`: the Ledger tokens (`docs/ui-ledger.md`): ink0-4 surfaces, `line` hairlines on every card, text/text2/
   text3, ember only for or1 acting now; type styles; `Motion` (120 ms colour, 220 ms layout, 360 ms enter, 180 ms
   march). State changes step rather than pulse; no blur or shadows.
@@ -205,6 +228,15 @@ thumbnail, viewer and screenshots instead of black (and screenshots of them go t
 - `shell` arms the leak guard before and after each command, so an `am start` without `--display` gets moved too.
 - Debug: `am broadcast -n com.or1.agent/.DebugReceiver --es display info|create|launch|tap|back|home|park|snap|front|move|tool …`
   (results in logcat tag `or1-display` and `files/display.txt`).
+
+## Email (`tools/EmailTool.kt`)
+Gmail's newest emails in one call. `email latest` opens Gmail on the work display, backs out of a message or search it
+was left on, scrolls to the top if needed and lists the inbox rows (`InboxReads`, JVM-tested: each clickable row is
+followed by its contact image, sender with message count, time, subject and snippet), newest first, with the screen.
+`email open` with `index` (1 = newest) taps that row and returns the message screen (an email card via `EmailReads`);
+`show=true` opens the viewer on it when the turn ends. "Show me my last email" is now one tool call and a one-sentence
+reply. Step timings in logcat tag `or1-email` (warm Gmail: open ~1.1 s, back ~1.8 s, tap into the message ~2.4 s; a
+Gmail start on a fresh work display ~3.9 s).
 
 ## Calendar (`tools/CalendarTool.kt`)
 There's no Google account, so `calendar add` writes to the first visible writable calendar, creating a local
@@ -474,9 +506,21 @@ The user doesn't use apps on this phone; the agent does. The app closes the syst
   "[The user sees this as a card. Reply in one short sentence.]" appended for the model only (the chat and transcript
   keep the plain result), so the reply doesn't restate the card. Not for notifications (the reply must name what's
   waiting and flag planted instructions) nor routine runs (their reply is a notification, no card).
-- Effort: agent.json's (medium) for typed requests; spoken ones (`Agent.send(spoken = true)`, voice mode) use low,
-  so less reasoning before each step. `--ez voice true` on the DebugReceiver and `or1-eval --voice` send requests as
-  spoken.
+- Effort: agent.json's (medium) for typed requests; spoken ones (`Agent.send(spoken = true)`, voice mode) use low
+  and **no thinking** (`ThinkingConfigDisabled`): for "Open Gmail and show me the last email" Haiku took 1.7 s and 85
+  output tokens without thinking, 2.4 s and 335 with adaptive thinking (which also asked for a needless screen read);
+  `between_tools` thinking isn't supported on Haiku. Without thinking the model narrated its plan before tool calls,
+  so the prompt's [Voice] rule now says to write nothing before or between them (voice mode would speak it).
+  `--ez voice true` on the DebugReceiver and `or1-eval --voice` send requests as spoken.
+- Cold start: the process's first request took 4-5 s to its first event, later ones ~1-1.4 s. `--es net probe`
+  showed why: DNS 13 ms, a TLS handshake 144 ms, the SDK's first call 3.9 s and its second 0.37 s, so it's the SDK's
+  first use (Jackson introspecting its models) on this CPU, not the network. `AgentHub` now runs `warmUpSdk` 4 s
+  after start (serializes a request like the agent's and folds sample stream events, ~7 s in the background) and
+  then `warm()` (a models-list call, which opens the connection); the first request then had its headers at 1.9 s.
+  `warm()` also runs when voice mode or push-to-talk starts listening, unless the API was used in the last 20 s.
+  Each model call's transcript record has `ms`, `first_ms` (first event) and `headers_ms` (response headers).
+- A `screen` call in the same response right after `open`, `act`, `screen` or `email` is answered from that result
+  ("Same screen as the open result just above") instead of reading again (`Agent.runTool`).
 - Each user message starts with `[Now: <local time>]` (not the system prompt, which must stay byte-stable for the
   cache), so relative dates need no `device get` call.
 

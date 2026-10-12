@@ -274,6 +274,19 @@ object HiddenDisplay {
         _focusReturned.value++
     }
 
+    /**
+     * Puts [displayId] on top, so keys go to it: re-starts its top task the way [restoreFocus] does for the real screen
+     * (setFocusedTask returns early for a task already on top of its own display).
+     */
+    fun putOnTop(displayId: Int) {
+        val intent = Tasks.topIntent(displayId) ?: return
+        try {
+            context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), ActivityOptions.makeBasic().setLaunchDisplayId(displayId).toBundle())
+        } catch (e: Exception) {
+            Log.w(TAG, "could not put display $displayId on top", e)
+        }
+    }
+
     /** Called after the leak guard moved a task, so the chat can come back to the front. */
     var onLeakMoved: (() -> Unit)? = null
 
@@ -302,6 +315,10 @@ object HiddenDisplay {
         setImePolicy(IME_LOCAL)
         // The user is watching: let the app be heard.
         id?.let { HiddenAudio.unmute(topAppPackage(it)) }
+        // The chat window stops taking focus while the viewer is open (WorkViewer), so the viewed display must have it:
+        // opened right after a turn (open with show), the real screen still did, and its next key (Back, volume) went
+        // to a window that can't take it: "no focused window", an ANR after 5 s.
+        id?.let { putOnTop(it) }
     }
 
     @Synchronized

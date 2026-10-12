@@ -74,6 +74,8 @@ object Stage {
         screen.keepAwake()
         // Its keyboard shows inside the viewer (searching YouTube), like the work screen's.
         HiddenDisplay.setImePolicy(HiddenDisplay.IME_LOCAL, stageId)
+        // Keys go to the stage while it's watched (see HiddenDisplay.attachViewer).
+        HiddenDisplay.putOnTop(stageId)
         true
     }
 

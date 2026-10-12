@@ -46,6 +46,7 @@ object StepLabels {
                 "stop_timer" -> "Stop the timer"
                 else -> "Checked the next alarm"
             }
+            "email" -> if (action == "open") "Opened email ${args.optInt("index", 1)} in Gmail" else "Checked the Gmail inbox"
             "media" -> when (action) {
                 "play" -> args.optString("query").ifBlank { null }?.let { "Play “${it.take(40)}”" } ?: "Play"
                 "pause" -> "Pause"

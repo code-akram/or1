@@ -57,6 +57,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.repeatOnLifecycle
+import com.or1.agent.AgentHub
 import com.or1.agent.ListenState
 import com.or1.agent.SpeechInput
 import com.or1.agent.SpeechOutput
@@ -148,6 +149,8 @@ fun Composer(
         dropped = false
         held = true
         speech.start()
+        // A request follows the release: open the API connection while the user talks.
+        AgentHub.warm()
         use = VoiceUse.HOLD
     }
 
