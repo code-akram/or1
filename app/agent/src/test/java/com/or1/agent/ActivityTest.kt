@@ -92,13 +92,17 @@ class ActivityTest {
 
     @Test fun shellAndUrisAreIrreversible() {
         assertEquals(UndoTier.NONE, classify("shell", args("command" to "pm uninstall com.x"))!!.tier)
-        assertEquals(UndoTier.NONE, classify("open", args("uri" to "https://example.com"))!!.tier)
+        // Opening an address is navigation, unless it could carry data out.
+        assertNull(classify("open", args("uri" to "https://www.youtube.com/results?search_query=lofi+hip+hop")))
+        val leak = "https://x.example/c?d=" + "my notes: likes tea, dark mode, short replies, lives in Dubai"
+        assertEquals(UndoTier.NONE, classify("open", args("uri" to leak))!!.tier)
         assertNull(classify("shell", args("command" to "content query --uri content://sms/inbox | head -5")))
         assertNull(classify("shell", args("command" to "dumpsys battery 2>/dev/null")))
         assertTrue(classify("shell", args("command" to "echo hi > /sdcard/x")) != null)
         assertTrue(classify("shell", args("command" to "ls; settings put system x 1")) != null)
         assertNull(classify("shell", args("command" to "am start --display 3 -a android.intent.action.VIEW -d \"vnd.youtube:abc\"")))
-        assertTrue(classify("shell", args("command" to "am start -a android.intent.action.VIEW -d https://x.example/?q=1")) != null)
+        assertNull(classify("shell", args("command" to "am start -a android.intent.action.VIEW -d https://x.example/?q=1")))
+        assertTrue(classify("shell", args("command" to "am start -a android.intent.action.VIEW -d \"https://x.example/?q=${"a".repeat(60)}\"")) != null)
     }
 
     @Test fun shellLabelsSayWhatTheCommandDid() {
@@ -113,7 +117,7 @@ class ActivityTest {
         assertEquals("Changed app com.x", label("pm disable-user --user 0 com.x"))
         assertEquals("Changed an app", label("pm trim-caches 1G"))
         assertEquals("Pressed keys", label("input keyevent 26"))
-        assertEquals("Opened x.example", label("am start -a android.intent.action.VIEW -d https://x.example/?q=1"))
+        assertEquals("Opened x.example", label("am start -a android.intent.action.VIEW -d https://x.example/?q=${"a".repeat(60)}"))
         assertEquals("Ran a shell command", label("echo hi > /sdcard/x"))
         assertEquals("Ran a shell command", label("rm /sdcard/notes.txt"))
     }

@@ -61,6 +61,9 @@ import androidx.compose.ui.unit.dp
 import com.or1.agent.AgentHub
 import com.or1.agent.ChatItem
 import com.or1.agent.ListenState
+import com.or1.agent.MediaApps
+import com.or1.agent.MediaKeeper
+import com.or1.agent.NowState
 import com.or1.agent.Sentences
 import com.or1.agent.SpeechInput
 import com.or1.agent.SpeechOutput
@@ -68,6 +71,7 @@ import com.or1.agent.UndoState
 import com.or1.agent.UndoTier
 import com.or1.agent.VoiceEngines
 import com.or1.agent.VoiceError
+import com.or1.agent.tools.HiddenDisplay
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -368,9 +372,16 @@ private fun VoiceMode(onClose: () -> Unit, first: String?) {
                     phase = Phase.SPEAKING
                     val said = turn?.let(::spokenSummary) ?: "Sorry, that didn't work."
                     Log.i(VOICE_TAG, "voice mode says: $said")
-                    say(output, input, said, id) { silentReply = it }?.let { barged ->
+                    // The turn started a song or video: the user wants to hear it, not a microphone open over it (the
+                    // recogniser would hear the media too). Say the reply without barge-in, then close.
+                    val media = workMediaPlaying()
+                    say(output, input, said, id, bargeIn = !media) { silentReply = it }?.let { barged ->
                         echo = said
                         pending = barged.text?.let { WakePhrase.strip(Barge.userPart(it, said)) }?.ifBlank { null }
+                    }
+                    if (media && pending == null) {
+                        Log.i(VOICE_TAG, "voice mode closes: media plays")
+                        break
                     }
                     quietSince = SystemClock.uptimeMillis()
                 }
@@ -574,7 +585,22 @@ private const val BARGE_AFTER_MS = 600L
  * Speaks [text] to the end, a tap, or a barge-in (returned). Without a TTS engine, shows it for a while instead. While
  * speaking it listens ([bargeIn]); when it ends without one, the listening is dropped.
  */
-private suspend fun say(output: SpeechOutput, input: SpeechInput, text: String, id: String, showSilently: (String?) -> Unit): Barged? {
+/** Media plays on the work display: kept after a turn, or the app in front there playing (MediaKeeper may not have decided yet). */
+private suspend fun workMediaPlaying(): Boolean {
+    // MediaKeeper gives a just-tapped player a few seconds to start; so does this.
+    repeat(8) {
+        if (MediaKeeper.kept.value != null) return true
+        val front = HiddenDisplay.foregroundPackage.value
+        if (front != null && NowState.media.value.any { it.pkg == front && it.playing }) return true
+        if (front == null || front !in MediaApps.KNOWN && front !in MediaApps.seen) return false
+        delay(500)
+    }
+    return false
+}
+
+private suspend fun say(
+    output: SpeechOutput, input: SpeechInput, text: String, id: String, bargeIn: Boolean = true, showSilently: (String?) -> Unit,
+): Barged? {
     showSilently(null)
     val ready = output.available.value || withTimeoutOrNull(5_000) { output.available.first { it } } != null
     if (!ready) {
@@ -585,11 +611,11 @@ private suspend fun say(output: SpeechOutput, input: SpeechInput, text: String, 
     output.speak(text, id)
     var barged: Barged? = null
     coroutineScope {
-        val listening = launch { bargeIn(input, output, text) { barged = it } }
+        val listening = if (bargeIn) launch { bargeIn(input, output, text) { barged = it } } else null
         if (withTimeoutOrNull(180_000) { output.progress.first { it.id == id && !it.speaking } } == null) output.stop()
-        listening.cancel()
+        listening?.cancel()
     }
-    if (barged == null) {
+    if (barged == null && bargeIn) {
         input.cancel()
         // A recogniser started again straight after a cancel fails with "client error" (5).
         delay(300)

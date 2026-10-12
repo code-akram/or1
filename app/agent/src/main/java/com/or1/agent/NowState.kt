@@ -23,6 +23,7 @@ import android.provider.AlarmClock
 import android.provider.CalendarContract
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import com.or1.agent.tools.HiddenAudio
 import com.or1.agent.tools.HiddenDisplay
 import com.or1.agent.tools.SystemTools
 import java.text.SimpleDateFormat
@@ -368,6 +369,9 @@ object NowState {
                 state = runCatching { c.playbackState?.state }.getOrNull() ?: PlaybackState.STATE_NONE,
             )
         }
+        // Media the agent just started in front of its display is meant to be heard (HiddenAudio mutes the rest).
+        val front = HiddenDisplay.foregroundPackage.value
+        if (front != null && HiddenDisplay.inUse.value) _media.value.firstOrNull { it.pkg == front && it.playing }?.let { HiddenAudio.onPlaying(it.pkg) }
         refreshChips()
     }
 

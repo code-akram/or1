@@ -129,10 +129,11 @@ class SystemTools(private val context: Context) {
         }
     }
 
-    fun clock(args: JSONObject): ToolOutput {
+    suspend fun clock(args: JSONObject): ToolOutput {
         val label = args.optString("label").takeIf { it.isNotBlank() }
         val intent = when (val action = args.getString("action")) {
             "next_alarm" -> return ToolOutput(nextAlarm())
+            "stop_timer" -> return ToolOutput(stopTimer(label))
             "set_alarm" -> {
                 val hour = args.optInt("hour", -1)
                 val minute = args.optInt("minute", 0)
@@ -188,6 +189,29 @@ class SystemTools(private val context: Context) {
             }
         }
         return "Turned off the %02d:%02d alarm.".format(hour, minute)
+    }
+
+    /**
+     * stop_timer: silences a ringing timer (its notification's Stop button, else DISMISS_TIMER) or cancels a running one
+     * ([cancelTimer]). Through notifications, not the Clock app's screen, so it never covers what's on the work display
+     * (a video playing there would stop).
+     */
+    private suspend fun stopTimer(label: String?): String {
+        val listener = NotifListener.instance ?: error("Notification access is off, so the timer can't be reached.")
+        val clock = Intent(AlarmClock.ACTION_SET_TIMER).resolveActivity(context.packageManager)?.packageName ?: error("No Clock app.")
+        val stops = listener.activeNotifications.filter { it.packageName == clock }.mapNotNull { sbn ->
+            sbn.notification.actions?.firstOrNull { it.title.toString().lowercase() in setOf("stop", "stop all", "dismiss") }
+        }
+        if (stops.isNotEmpty()) {
+            stops.forEach { it.actionIntent.send() }
+            return if (stops.size == 1) "Stopped the ringing timer." else "Stopped ${stops.size} ringing timers."
+        }
+        if (listener.activeNotifications.none { it.packageName == clock && !it.notification.actions.isNullOrEmpty() }) {
+            // A ringing timer whose notification has no Stop button (or none showing yet): ask the Clock app.
+            HiddenDisplay.start(Intent(AlarmClock.ACTION_DISMISS_TIMER).putExtra(AlarmClock.EXTRA_SKIP_UI, true))
+            return "Asked the Clock app to stop any ringing timer; no timer was running."
+        }
+        return cancelTimer(label)
     }
 
     /**

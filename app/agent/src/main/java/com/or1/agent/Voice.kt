@@ -72,7 +72,11 @@ interface SpeechInput {
     val result: StateFlow<String?>
     val error: StateFlow<VoiceError?>
     val level: StateFlow<Float>
-    fun start()
+    /**
+     * [focus]: duck other audio while listening (push-to-talk, voice mode). The wake-phrase listener passes false, so
+     * media on the idle home isn't ducked whenever it listens.
+     */
+    fun start(focus: Boolean = true)
     /** Stop listening and finish: the words heard so far become [result]. */
     fun stop()
     /** Stop and drop the utterance. */
@@ -245,7 +249,12 @@ class AndroidSpeechInput(private val context: Context) : SpeechInput {
 
     private fun candidates() = VoiceLanguages.candidates(Locale.getDefault())
 
-    override fun start() = onMain {
+    /** Whether this utterance ducks other audio; see [SpeechInput.start]. */
+    @Volatile
+    private var takesFocus = true
+
+    override fun start(focus: Boolean) = onMain {
+        takesFocus = focus
         session++
         // An utterance still being processed is dropped; the recogniser would otherwise be busy.
         metering = false
@@ -354,10 +363,11 @@ class AndroidSpeechInput(private val context: Context) : SpeechInput {
         if (Looper.myLooper() == Looper.getMainLooper()) block() else main.post(block)
     }
 
-    /** Holds audio focus while listening (so media pauses), releases it after. */
+    /** Holds audio focus while listening (so media ducks), unless [takesFocus] is off; releases it after. */
     private fun setState(s: ListenState) {
         _state.value = s
-        if (s == ListenState.LISTENING || s == ListenState.PROCESSING) AudioFocus.hold(context, "listen") else AudioFocus.drop(context, "listen")
+        val listening = s == ListenState.LISTENING || s == ListenState.PROCESSING
+        if (listening && takesFocus) AudioFocus.hold(context, "listen") else AudioFocus.drop(context, "listen")
     }
 
     // --- Languages ---
@@ -634,8 +644,9 @@ class AndroidSpeechInput(private val context: Context) : SpeechInput {
 }
 
 /**
- * Transient audio focus while or1 listens or speaks (media pauses), released when neither is: one request shared by
- * both, held while anyone holds it.
+ * Transient audio focus while or1 listens or speaks, released when neither is: one request shared by both, held while
+ * anyone holds it. MAY_DUCK, so media the user asked for (a video or1 started) gets quieter under or1's voice instead
+ * of pausing (YouTube pauses on a plain transient loss and voice mode takes focus again every few seconds).
  */
 object AudioFocus {
     private val holders = mutableSetOf<String>()
@@ -645,7 +656,7 @@ object AudioFocus {
     fun hold(context: Context, who: String) {
         if (!holders.add(who) || holders.size > 1) return
         val am = context.getSystemService(AudioManager::class.java) ?: return
-        val r = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+        val r = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
             .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
             .setOnAudioFocusChangeListener { }
             .build()

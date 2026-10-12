@@ -661,7 +661,7 @@ private suspend fun listenForWake(speech: SpeechInput, output: SpeechOutput, wak
     while (true) {
         output.progress.first { !it.speaking }
         wake.owns = true
-        speech.start()
+        speech.start(focus = false)
         val state = combine(speech.state, speech.partial) { s, p -> s to p }
             .first { (s, p) -> WakePhrase.heard(p) || s == ListenState.IDLE || s == ListenState.ERROR }.first
         val result = speech.result.value

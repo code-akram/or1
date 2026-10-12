@@ -107,13 +107,15 @@ TOOLS = [
             "rings at the next occurrence of that time (it can't target a later date). Between midnight and 05:00, "
             "\"tomorrow morning\" means the coming morning, which is the next occurrence: set it and say the day. "
             "set_timer: `seconds`, optional `label`. dismiss_alarm: turns off alarms matching `label`, or all "
-            "alarms if no label is given. next_alarm: when the next alarm rings. To view or cancel timers, open the "
-            "Clock app (open package com.android.deskclock) and use the screen."
+            "alarms if no label is given. next_alarm: when the next alarm rings. stop_timer: silences a ringing "
+            "timer, or cancels the running one (optional `label` picks it); use it instead of opening the Clock app, "
+            "which would cover whatever is playing. To view timers, open the Clock app (open package "
+            "com.android.deskclock) and use the screen."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["set_alarm", "set_timer", "dismiss_alarm", "next_alarm"]},
+                "action": {"type": "string", "enum": ["set_alarm", "set_timer", "dismiss_alarm", "next_alarm", "stop_timer"]},
                 "hour": {"type": "integer"},
                 "minute": {"type": "integer"},
                 "seconds": {"type": "integer"},
@@ -371,6 +373,8 @@ def _clock(args: dict) -> str:
             raise ValueError("set_timer needs `seconds` between 1 and 86400.")
         cmd = (f"am start -a android.intent.action.SET_TIMER --ei {ALARM_EXTRA}LENGTH {secs}{msg} "
                f"--ez {ALARM_EXTRA}SKIP_UI true")
+    elif action == "stop_timer":
+        cmd = f"am start -a android.intent.action.DISMISS_TIMER --ez {ALARM_EXTRA}SKIP_UI true"
     elif action == "dismiss_alarm":
         mode = f"--es {ALARM_EXTRA}SEARCH_MODE android.label{msg}" if label else f"--es {ALARM_EXTRA}SEARCH_MODE android.all"
         cmd = f"am start -a android.intent.action.DISMISS_ALARM {mode}"
@@ -383,6 +387,8 @@ def _clock(args: dict) -> str:
     adb.shell("input keyevent KEYCODE_HOME")
     if action == "set_timer":
         return f"Timer set for {args['seconds']} seconds."
+    if action == "stop_timer":
+        return "Asked the Clock app to stop the ringing timer."
     return _next_alarm()
 
 

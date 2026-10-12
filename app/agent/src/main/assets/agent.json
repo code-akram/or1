@@ -133,7 +133,7 @@
   },
   {
    "name": "clock",
-   "description": "Alarms and timers without touching the UI. set_alarm: `hour` (0-23), `minute`, optional `label`; it rings at the next occurrence of that time (it can't target a later date). Between midnight and 05:00, \"tomorrow morning\" means the coming morning, which is the next occurrence: set it and say the day. set_timer: `seconds`, optional `label`. dismiss_alarm: turns off alarms matching `label`, or all alarms if no label is given. next_alarm: when the next alarm rings. To view or cancel timers, open the Clock app (open package com.android.deskclock) and use the screen.",
+   "description": "Alarms and timers without touching the UI. set_alarm: `hour` (0-23), `minute`, optional `label`; it rings at the next occurrence of that time (it can't target a later date). Between midnight and 05:00, \"tomorrow morning\" means the coming morning, which is the next occurrence: set it and say the day. set_timer: `seconds`, optional `label`. dismiss_alarm: turns off alarms matching `label`, or all alarms if no label is given. next_alarm: when the next alarm rings. stop_timer: silences a ringing timer, or cancels the running one (optional `label` picks it); use it instead of opening the Clock app, which would cover whatever is playing. To view timers, open the Clock app (open package com.android.deskclock) and use the screen.",
    "input_schema": {
     "type": "object",
     "properties": {
@@ -143,7 +143,8 @@
        "set_alarm",
        "set_timer",
        "dismiss_alarm",
-       "next_alarm"
+       "next_alarm",
+       "stop_timer"
       ]
      },
      "hour": {

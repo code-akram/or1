@@ -221,7 +221,7 @@ object HiddenDisplay {
         display?.surface = null
         parked = true
         wakeLock?.takeIf { it.isHeld }?.release()
-        HiddenAudio.unmuteAll()
+        HiddenAudio.park()
     }
 
     /** [park] unless a request is using the display (it parks it when it ends). */

@@ -7,7 +7,9 @@ import android.util.Log
 
 /**
  * Keeps apps on the hidden work display quiet while the agent works: their PLAY_AUDIO app-op is set to ignored
- * (AudioService then mutes their players). Everything is restored when the display is parked at the end of a request
+ * (AudioService then mutes their players). Except media the agent starts: an app whose media session starts playing
+ * while it's in front of the work display during a request is [heard] from then on (the user asked for that song or
+ * video), until the display parks. Everything is restored when the display is parked at the end of a request
  * (a parked display's apps are stopped anyway), when the user brings an app to the front, or while they watch it in
  * the viewer. The muted set is kept in prefs so a crash can't leave an app muted: [init] restores them all.
  * Left alone: the alarm app (its alarms must ring even if the agent just set one through it), and apps sharing a system
@@ -32,6 +34,24 @@ object HiddenAudio {
 
     private fun muted(): Set<String> = prefs.getStringSet(KEY, emptySet()).orEmpty()
 
+    /** Apps playing media the agent started: never muted until [park]. */
+    private val heard = mutableSetOf<String>()
+
+    /** [pkg]'s media session is playing while it's in front of the work display during a request: let it be heard. */
+    @Synchronized
+    fun onPlaying(pkg: String) {
+        if (!heard.add(pkg)) return
+        Log.i(TAG, "$pkg plays media the agent started: heard")
+        unmute(pkg)
+    }
+
+    /** The display parked (or its media moved away): apps are muted again the next time the agent works with them. */
+    @Synchronized
+    fun park() {
+        heard.clear()
+        unmuteAll()
+    }
+
     /** Packages that handle "set an alarm": never muted. */
     private val alarmApps by lazy {
         context.packageManager.queryIntentActivities(android.content.Intent(android.provider.AlarmClock.ACTION_SET_ALARM), 0)
@@ -40,7 +60,7 @@ object HiddenAudio {
 
     @Synchronized
     fun mute(pkg: String?) {
-        if (pkg == null || pkg == context.packageName || pkg in muted() || pkg in alarmApps) return
+        if (pkg == null || pkg == context.packageName || pkg in heard || pkg in muted() || pkg in alarmApps) return
         if (setMode(pkg, AppOpsManager.MODE_IGNORED)) {
             prefs.edit().putStringSet(KEY, muted() + pkg).apply()
             Log.i(TAG, "muted $pkg on the hidden display")

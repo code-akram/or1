@@ -189,7 +189,7 @@ object Effects {
                 else -> null
             }
             "act" -> if (action == "tap") tap(facts, now) else null
-            "open" -> args.optString("uri").takeIf { it.isNotBlank() && args.optString("package").isBlank() }
+            "open" -> args.optString("uri").takeIf { it.isNotBlank() && args.optString("package").isBlank() && carriesData(it) }
                 ?.let { Classified("Opened ${clip(it, 60)}", UndoTier.NONE) }
             "shell" -> args.optString("command").takeIf { it.isNotBlank() && !isReadOnlyShell(it) }
                 ?.let { Classified(shellLabel(it), UndoTier.NONE) }
@@ -223,11 +223,23 @@ object Effects {
     private fun shellParts(command: String) = command.split(Regex("&&|\\|\\||[;|\\n]")).map { it.trim() }.filter { it.isNotEmpty() }
 
     private fun isReadOnlyPart(part: String) = readOnlyShell.any { part == it || part.startsWith("$it ") } ||
-        // Starting an app is navigation, like open; a web address could carry data out, like open with a URI.
-        // ("am startservice" is not: it commands an app.)
-        ((part == "am start" || part.startsWith("am start ")) && !WEB.containsMatchIn(part))
+        // Starting an app is navigation, like open; a web address that carries data could send it out, like open with
+        // such a URI. ("am startservice" is not: it commands an app.)
+        ((part == "am start" || part.startsWith("am start ")) && WEB_URL.findAll(part).none { carriesData(it.value) })
 
-    private val WEB = Regex("https?:")
+    private val WEB_URL = Regex("https?://[^\\s\"']+")
+
+    /**
+     * Opening an address is navigation (a search, a video) unless it could carry the user's data out: a query or
+     * fragment value of [DATA_CHARS]+ characters, as a link that "sends your notes" would. Only those get a receipt, so
+     * everyday opens ("Opened YouTube") don't fill the receipts with irreversible rows.
+     */
+    fun carriesData(uri: String): Boolean {
+        val rest = uri.substringAfter('?', "").ifEmpty { null }.orEmpty() + "&" + uri.substringAfter('#', "")
+        return rest.split('&', ';').any { it.substringAfter('=').length >= DATA_CHARS }
+    }
+
+    private const val DATA_CHARS = 48
     private val PACKAGE = Regex("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+$")
 
     /**
@@ -248,7 +260,7 @@ object Effects {
             words[0] == "pm" -> words.drop(2).lastOrNull { PACKAGE.matches(it.substringBefore('/')) }
                 ?.let { "Changed app ${clip(it.substringBefore('/'))}" } ?: "Changed an app"
             words[0] == "input" -> "Pressed keys"
-            words.getOrNull(0) == "am" && words.getOrNull(1) == "start" && WEB.containsMatchIn(part) ->
+            words.getOrNull(0) == "am" && words.getOrNull(1) == "start" && WEB_URL.containsMatchIn(part) ->
                 Regex("https?://([^/?#\"' :]+)").find(part)?.groupValues?.get(1)?.let { "Opened ${clip(it)}" } ?: "Opened a web address"
             else -> "Ran a shell command"
         }

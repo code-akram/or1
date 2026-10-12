@@ -2,6 +2,7 @@ package com.or1.agent
 
 import android.os.SystemClock
 import android.util.Log
+import com.or1.agent.tools.HiddenAudio
 import com.or1.agent.tools.HiddenDisplay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -57,6 +58,8 @@ object MediaKeeper {
             }
             Log.i(TAG, "keeping the work display awake: $pkg is playing")
             HiddenDisplay.release()
+            // Its new screens (the next video) don't mute it again.
+            HiddenAudio.onPlaying(pkg)
             _kept.value = pkg
             var idleSince: Long? = null
             var why = "the display went away"
