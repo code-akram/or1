@@ -1,30 +1,18 @@
 package com.or1.agent.tools
 
 import android.app.ActivityOptions
-import androidx.activity.compose.setContent
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.PixelFormat
-import android.hardware.display.DisplayManager
-import android.hardware.display.VirtualDisplay
-import android.media.ImageReader
-import android.os.Bundle
-import android.os.Handler
-import android.os.HandlerThread
 import android.os.SystemClock
 import android.util.Log
 import android.view.Display
-import android.view.InputEvent
 import android.view.KeyEvent
-import android.view.MotionEvent
 import android.view.Surface
 import android.view.accessibility.AccessibilityWindowInfo
 import com.or1.agent.A11yService
 import com.or1.agent.Evidence
 import com.or1.agent.TapMark
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -36,9 +24,6 @@ import kotlinx.coroutines.flow.StateFlow
  */
 object HiddenDisplay {
     private const val TAG = "or1-display"
-
-    /** MotionEvent.FLAG_NO_FOCUS_CHANGE (hidden). */
-    private const val FLAG_NO_FOCUS_CHANGE = 0x40
 
     const val IME_LOCAL = 0
     /**
@@ -107,7 +92,7 @@ object HiddenDisplay {
         id?.let { unpark(); work.holdAwake(); _inUse.value = true; return it }
         if (unavailable) return null
         return try {
-            releaseStaleDisplays()
+            Tasks.releaseStale(context)
             work.create(context) { reset() }.also {
                 setImePolicy(IME_FALLBACK)
                 work.holdAwake()
@@ -198,8 +183,8 @@ object HiddenDisplay {
         val target = id ?: return
         val pkg = topAppPackage(Display.DEFAULT_DISPLAY) ?: return
         if (pkg == context.packageName || pkg in refused || pkg in SYSTEM_SURFACES) return
-        val task = topTaskOf(pkg, Display.DEFAULT_DISPLAY) ?: return
-        if (moveTaskToDisplay(task, target)) {
+        val task = Tasks.topOf(pkg, Display.DEFAULT_DISPLAY) ?: return
+        if (Tasks.move(task, target)) {
             Log.i(TAG, "moved $pkg (task $task) from the real screen to the hidden display")
             currentPackage = pkg
             onLeakMoved?.invoke()
@@ -229,7 +214,7 @@ object HiddenDisplay {
         // the activity starter, which moves its display back on top without relaunching anything. The direct routes
         // don't work in 13: WMS.moveDisplayToTop isn't on the binder interface, and setFocusedTask/moveTaskToFront
         // return early when the task is already its display's top task.
-        val intent = topTaskIntent(Display.DEFAULT_DISPLAY) ?: return
+        val intent = Tasks.topIntent(Display.DEFAULT_DISPLAY) ?: return
         try {
             context.startActivity(
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
@@ -239,23 +224,6 @@ object HiddenDisplay {
             Log.w(TAG, "could not bring the real screen back on top", e)
         }
         _focusReturned.value++
-    }
-
-    /** The base intent of the top task on [displayId]. */
-    private fun topTaskIntent(displayId: Int): Intent? = try {
-        val infos = atm!!.javaClass.getMethod("getAllRootTaskInfosOnDisplay", Int::class.javaPrimitiveType).invoke(atm, displayId) as List<*>
-        infos.firstOrNull()?.let { Class.forName("android.app.TaskInfo").getField("baseIntent").get(it) as Intent? }?.let { Intent(it) }
-    } catch (e: Exception) {
-        Log.w(TAG, "no top task on display $displayId", e)
-        null
-    }
-
-    private fun setFocusedTask(taskId: Int): Boolean = try {
-        atm!!.javaClass.getMethod("setFocusedTask", Int::class.javaPrimitiveType).invoke(atm, taskId)
-        true
-    } catch (e: Exception) {
-        Log.w(TAG, "setFocusedTask($taskId) failed", e)
-        false
     }
 
     /** Called after the leak guard moved a task, so the chat can come back to the front. */
@@ -321,7 +289,7 @@ object HiddenDisplay {
             context.startActivity(intent)
             return Display.DEFAULT_DISPLAY
         }
-        val before = tasksOn(target).firstOrNull()?.second
+        val before = Tasks.on(target).firstOrNull()?.second
         val options = ActivityOptions.makeBasic().setLaunchDisplayId(target)
         try {
             context.startActivity(intent, options.toBundle())
@@ -340,8 +308,8 @@ object HiddenDisplay {
         }
         // It may have opened on the real screen (an existing task that wasn't moved): move it.
         val pkg = expectPackage ?: topAppPackage(Display.DEFAULT_DISPLAY)
-        val task = pkg?.let { topTaskOf(it, Display.DEFAULT_DISPLAY) }
-        if (task != null && moveTaskToDisplay(task, target) && waitForApp(target, pkg, before) != null) {
+        val task = pkg?.let { Tasks.topOf(it, Display.DEFAULT_DISPLAY) }
+        if (task != null && Tasks.move(task, target) && waitForApp(target, pkg, before) != null) {
             restoreFocus()
             currentPackage = pkg
             return target
@@ -365,7 +333,7 @@ object HiddenDisplay {
         repeat(15) {
             delay(200)
             // The task list is authoritative; accessibility windows lag behind it.
-            val top = tasksOn(displayId).firstOrNull()?.second ?: topAppPackage(displayId)
+            val top = Tasks.on(displayId).firstOrNull()?.second ?: topAppPackage(displayId)
             if (top != null && top != context.packageName && (if (pkg != null) top == pkg else top != before)) {
                 landed = top
                 if (topAppPackage(displayId) == top) return top
@@ -390,107 +358,21 @@ object HiddenDisplay {
         return A11yService.instance?.windowsOnAllDisplays?.indexOfKey(displayId)?.let { it >= 0 } == true
     }
 
-    // --- Tasks (IActivityTaskManager, hidden) ------------------------------------------------------------------
-
-    private val atm: Any? by lazy {
-        try {
-            Class.forName("android.app.ActivityTaskManager").getMethod("getService").invoke(null)
-        } catch (e: Exception) {
-            Log.w(TAG, "no ActivityTaskManager service", e)
-            null
-        }
-    }
-
-    /** Task ids of root tasks on [displayId], topmost first, paired with their top activity's package. */
-    fun tasksOn(displayId: Int): List<Pair<Int, String?>> = try {
-        val infos = atm!!.javaClass.getMethod("getAllRootTaskInfosOnDisplay", Int::class.javaPrimitiveType).invoke(atm, displayId) as List<*>
-        infos.mapNotNull { info ->
-            info ?: return@mapNotNull null
-            val cls = Class.forName("android.app.TaskInfo")
-            val taskId = cls.getField("taskId").getInt(info)
-            val top = cls.getField("topActivity").get(info) as android.content.ComponentName?
-            taskId to top?.packageName
-        }
-    } catch (e: Exception) {
-        Log.w(TAG, "getAllRootTaskInfosOnDisplay failed", e)
-        emptyList()
-    }
-
-    /**
-     * Frees hidden displays left behind by an earlier process of this app. DisplayManager drops a virtual display
-     * when its owner dies, but WindowManager keeps the display until its last root task is gone. Apps that embed
-     * activities (Settings) leave an empty task there: their activities finish, but the TaskFragments they organize
-     * stay until the organizer removes them, which it never does for a removed display. Force-stopping the app
-     * makes WindowManager drop its TaskFragments, the task, and then the display. Skipped for an app that still has a
-     * task on a live display, so this never closes something the user has open.
-     */
-    private fun releaseStaleDisplays() {
-        try {
-            val live = context.getSystemService(DisplayManager::class.java).displays.map { it.displayId }.toSet()
-            val infos = atm!!.javaClass.getMethod("getAllRootTaskInfos").invoke(atm) as List<*>
-            val cls = Class.forName("android.app.TaskInfo")
-            val tasks = infos.filterNotNull().map { info ->
-                val intent = cls.getField("baseIntent").get(info) as Intent?
-                val pkg = intent?.component?.packageName ?: (cls.getField("realActivity").get(info) as android.content.ComponentName?)?.packageName
-                cls.getField("displayId").getInt(info) to pkg
-            }
-            val (stale, current) = tasks.partition { it.first !in live }
-            val inUse = current.mapNotNull { it.second }.toSet()
-            val packages = stale.mapNotNull { it.second }.toSet() - inUse - context.packageName
-            if (stale.isEmpty()) return
-            Log.i(TAG, "stale displays ${stale.map { it.first }.distinct()}; force-stopping $packages")
-            val am = context.getSystemService(android.app.ActivityManager::class.java)
-            for (pkg in packages) am.javaClass.getMethod("forceStopPackage", String::class.java).invoke(am, pkg)
-        } catch (e: Exception) {
-            Log.w(TAG, "could not release stale displays", e)
-        }
-    }
-
-    private fun topTaskOf(pkg: String, displayId: Int): Int? = tasksOn(displayId).firstOrNull { it.second == pkg }?.first
-
-    fun moveTaskToDisplay(taskId: Int, displayId: Int): Boolean = try {
-        atm!!.javaClass.getMethod("moveRootTaskToDisplay", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
-            .invoke(atm, taskId, displayId)
-        true
-    } catch (e: Exception) {
-        Log.w(TAG, "moveRootTaskToDisplay($taskId, $displayId) failed", e)
-        false
-    }
-
     /** Gives the hidden display's top task input focus, so injected keys reach it. */
     fun focus(): Boolean {
-        val task = tasksOn(id ?: return false).firstOrNull()?.first ?: return false
-        return setFocusedTask(task)
+        val task = Tasks.on(id ?: return false).firstOrNull()?.first ?: return false
+        return Tasks.setFocused(task)
     }
 
     /** Moves the hidden display's top task to the real screen; the agent stops tracking it. */
     fun bringToFront(): Boolean {
-        val (task, pkg) = tasksOn(id ?: return false).firstOrNull() ?: return false
+        val (task, pkg) = Tasks.on(id ?: return false).firstOrNull() ?: return false
         currentPackage = null
         HiddenAudio.unmute(pkg)
-        return moveTaskToDisplay(task, Display.DEFAULT_DISPLAY).also { refreshForegroundApp() }
+        return Tasks.move(task, Display.DEFAULT_DISPLAY).also { refreshForegroundApp() }
     }
 
     // --- Input (InputManager.injectInputEvent, hidden; needs INJECT_EVENTS) ------------------------------------
-
-    private val inputManager: Any? by lazy {
-        try {
-            Class.forName("android.hardware.input.InputManager").getMethod("getInstance").invoke(null)
-        } catch (e: Exception) {
-            Log.w(TAG, "no InputManager", e)
-            null
-        }
-    }
-
-    /** [waitForFinish]: block until the target window has handled the event (InputManager mode WAIT_FOR_FINISH). */
-    fun inject(event: InputEvent, displayId: Int, waitForFinish: Boolean = false): Boolean = try {
-        InputEvent::class.java.getMethod("setDisplayId", Int::class.javaPrimitiveType).invoke(event, displayId)
-        inputManager!!.javaClass.getMethod("injectInputEvent", InputEvent::class.java, Int::class.javaPrimitiveType)
-            .invoke(inputManager, event, if (waitForFinish) 2 else 0) as Boolean
-    } catch (e: Exception) {
-        Log.w(TAG, "injectInputEvent failed", e)
-        false
-    }
 
     /**
      * Keys go to the focused window, and only the top display has one, so the hidden display takes focus for the
@@ -504,42 +386,21 @@ object HiddenDisplay {
             val now = SystemClock.uptimeMillis()
             val down = KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0)
             val up = KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0)
-            return inject(down, displayId, waitForFinish = true) && inject(up, displayId, waitForFinish = true)
+            return Input.inject(down, displayId, waitForFinish = true) && Input.inject(up, displayId, waitForFinish = true)
         } finally {
             deliveringKey = false
             restoreFocus()
         }
     }
 
-    /**
-     * A tap (same start and end) or swipe as injected touch events, for when accessibility gestures don't land.
-     * Marked FLAG_NO_FOCUS_CHANGE (honoured for trusted injections), so the touch doesn't move focus to the hidden
-     * display.
-     */
+    /** A tap or swipe as injected touch events ([Input.stroke]), marked for the work display's thumbnail. */
     fun injectStroke(x1: Float, y1: Float, x2: Float, y2: Float, durationMs: Long, displayId: Int): Boolean {
         if (displayId == id) {
             // Where the stroke starts, for the ember ring over the work display's thumbnail.
             val kind = if (x1 != x2 || y1 != y2) "swipe" else if (durationMs >= 300) "long_press" else "tap"
             Evidence.tap(TapMark(x1, y1, work.size.x, work.size.y, SystemClock.elapsedRealtime(), kind))
         }
-        val down = SystemClock.uptimeMillis()
-        val pointer = arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_FINGER })
-        fun ev(action: Int, t: Long, x: Float, y: Float): MotionEvent {
-            val coords = arrayOf(MotionEvent.PointerCoords().apply { this.x = x; this.y = y; pressure = 1f; size = 1f })
-            return MotionEvent.obtain(
-                down, t, action, 1, pointer, coords, 0, 0, 1f, 1f, 0, 0,
-                android.view.InputDevice.SOURCE_TOUCHSCREEN, FLAG_NO_FOCUS_CHANGE,
-            )
-        }
-        if (!inject(ev(MotionEvent.ACTION_DOWN, down, x1, y1), displayId)) return false
-        val steps = if (x1 == x2 && y1 == y2) 0 else 10
-        for (i in 1..steps) {
-            val f = i.toFloat() / steps
-            Thread.sleep(durationMs / steps)
-            inject(ev(MotionEvent.ACTION_MOVE, down + durationMs * i / steps, x1 + (x2 - x1) * f, y1 + (y2 - y1) * f), displayId)
-        }
-        if (steps == 0) Thread.sleep(durationMs)
-        return inject(ev(MotionEvent.ACTION_UP, down + durationMs, x2, y2), displayId)
+        return Input.stroke(x1, y1, x2, y2, durationMs, displayId)
     }
 
     /** Starts [intent] on the hidden display without waiting for a window (e.g. AlarmClock intents with SKIP_UI). */
@@ -573,25 +434,5 @@ object HiddenDisplay {
             ActivityOptions.makeBasic().setLaunchDisplayId(target).toBundle(),
         )
         restoreFocus()
-    }
-}
-
-/**
- * The hidden display's home screen (it has no launcher): a grid of the phone's apps, so the user can start one when
- * they use the work screen themselves (see WorkViewer). Apps open on the same display.
- */
-class WorkHomeActivity : androidx.activity.ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        window.decorView.setBackgroundColor(android.graphics.Color.BLACK)
-        setContent { com.or1.agent.ui.AppGrid(onOpen = ::open) }
-    }
-
-    private fun open(intent: Intent) {
-        val displayId = window.decorView.display?.displayId ?: return
-        startActivity(
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED),
-            ActivityOptions.makeBasic().setLaunchDisplayId(displayId).toBundle(),
-        )
     }
 }

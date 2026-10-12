@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.or1.agent.AgentHub
 import com.or1.agent.tools.HiddenDisplay
+import com.or1.agent.tools.Input
 import kotlin.concurrent.thread
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -193,7 +194,7 @@ private class WorkSurface(context: Context) : SurfaceView(context), SurfaceHolde
         val copy = MotionEvent.obtain(event)
         copy.transform(Matrix().apply { setScale(720f / width, 1600f / height) })
         copy.source = InputDevice.SOURCE_TOUCHSCREEN
-        HiddenDisplay.inject(copy, displayId)
+        Input.inject(copy, displayId)
         copy.recycle()
         return true
     }

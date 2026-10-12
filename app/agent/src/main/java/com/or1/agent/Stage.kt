@@ -7,6 +7,7 @@ import android.os.SystemClock
 import android.util.Log
 import com.or1.agent.tools.HiddenAudio
 import com.or1.agent.tools.HiddenDisplay
+import com.or1.agent.tools.Tasks
 import com.or1.agent.tools.VirtualScreen
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -106,7 +107,7 @@ object Stage {
     /** Moves [pkg]'s task from the work display to the stage. */
     private fun admit(pkg: String): Boolean {
         val workId = HiddenDisplay.id ?: return false
-        val task = HiddenDisplay.tasksOn(workId).firstOrNull { it.second == pkg }?.first ?: return false
+        val task = Tasks.topOf(pkg, workId) ?: return false
         val stageId = screen.id ?: try {
             screen.create(context) { scope.launch { synchronized(lock) { stopped() } } }
         } catch (e: Exception) {
@@ -115,10 +116,10 @@ object Stage {
         }
         // One app plays here at a time: the one before goes back to the work display, which parks (it stops).
         _kept.value?.takeIf { it != pkg }?.let { old ->
-            HiddenDisplay.tasksOn(stageId).firstOrNull { it.second == old }?.first?.let { HiddenDisplay.moveTaskToDisplay(it, workId) }
+            Tasks.topOf(old, stageId)?.let { Tasks.move(it, workId) }
             Log.i(TAG, "$old leaves the stage for $pkg")
         }
-        if (!HiddenDisplay.moveTaskToDisplay(task, stageId)) return false
+        if (!Tasks.move(task, stageId)) return false
         screen.unpark()
         screen.holdAwake()
         // Moving the task brought the stage to the top, with focus: give it back to the chat.
@@ -139,7 +140,7 @@ object Stage {
             while (true) {
                 delay(CHECK_MS)
                 val stageId = screen.id
-                if (stageId == null || HiddenDisplay.tasksOn(stageId).none { it.second == pkg }) {
+                if (stageId == null || Tasks.topOf(pkg, stageId) == null) {
                     why = "it left the stage"
                     break
                 }
@@ -168,7 +169,7 @@ object Stage {
         val stageId = screen.id
         val workId = HiddenDisplay.id
         if (stageId != null && workId != null && !busy()) {
-            HiddenDisplay.tasksOn(stageId).firstOrNull { it.second == pkg }?.first?.let { HiddenDisplay.moveTaskToDisplay(it, workId) }
+            Tasks.topOf(pkg, stageId)?.let { Tasks.move(it, workId) }
             HiddenDisplay.park()
             HiddenDisplay.restoreFocus()
         }
@@ -192,11 +193,11 @@ object Stage {
         decide?.cancel()
         watch?.cancel()
         val workId = HiddenDisplay.ensure()
-        val task = screen.id?.let { id -> HiddenDisplay.tasksOn(id).firstOrNull { it.second == kept }?.first }
+        val task = screen.id?.let { Tasks.topOf(kept, it) }
         if (workId != null && task != null) {
             // It's what the user asked to hear: the work display's muting leaves it alone.
             HiddenAudio.onPlaying(kept)
-            HiddenDisplay.moveTaskToDisplay(task, workId)
+            Tasks.move(task, workId)
             HiddenDisplay.restoreFocus()
             Log.i(TAG, "$kept back on the work display")
         }

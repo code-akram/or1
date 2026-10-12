@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.IBinder
 import com.or1.agent.tools.HiddenDisplay
+import com.or1.agent.tools.Tasks
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -359,7 +360,7 @@ private fun displayCommand(context: Context, command: String, intent: Intent) {
                     "snap saved"
                 }
                 "front" -> "moved=${HiddenDisplay.bringToFront()}"
-                "move" -> "moved=${HiddenDisplay.moveTaskToDisplay(intent.getIntExtra("task", -1), HiddenDisplay.ensure()!!)}"
+                "move" -> "moved=${Tasks.move(intent.getIntExtra("task", -1), HiddenDisplay.ensure()!!)}"
                 else -> ""
             } + "\n" + info()
         } catch (e: Exception) {
@@ -376,5 +377,5 @@ private fun debugTools(context: Context) = tools ?: com.or1.agent.tools.Tools(co
 private fun info(): String {
     val id = HiddenDisplay.id ?: return "no hidden display (unavailable=${HiddenDisplay.unavailable})"
     return "display=$id a11y=${HiddenDisplay.accessibilitySees()} top0=${HiddenDisplay.topAppPackage(0)} topN=${HiddenDisplay.topAppPackage(id)} " +
-        "tasksN=${HiddenDisplay.tasksOn(id)} tasks0=${HiddenDisplay.tasksOn(0)} preview=${HiddenDisplay.preview.value?.let { "${it.width}x${it.height}" }}"
+        "tasksN=${Tasks.on(id)} tasks0=${Tasks.on(0)} preview=${HiddenDisplay.preview.value?.let { "${it.width}x${it.height}" }}"
 }
