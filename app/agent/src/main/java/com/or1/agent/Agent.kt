@@ -95,13 +95,15 @@ class Agent(
     /** This conversation's transcript (past chats list it by file). */
     val transcriptFile: java.io.File get() = transcript.file
 
-    suspend fun send(text: String): String {
+    /** [spoken]: the request was spoken and the reply will be read aloud; marked [Voice] for the prompt's short-reply rule. */
+    suspend fun send(text: String, spoken: Boolean = false): String {
         val start = messages.size
         // The local time rides on each message (not the system prompt, which must stay byte-stable for the cache), so
         // date-relative requests don't spend a call on `device get`.
         val now = java.text.SimpleDateFormat("EEE dd MMM yyyy HH:mm zzz", java.util.Locale.US).format(java.util.Date())
-        messages += MessageParam.builder().role(MessageParam.Role.USER).content("[Now: $now] $text").build()
-        transcript.log(JSONObject().put("user", text).put("now", now))
+        val mark = if (spoken) " [Voice]" else ""
+        messages += MessageParam.builder().role(MessageParam.Role.USER).content("[Now: $now]$mark $text").build()
+        transcript.log(JSONObject().put("user", text).put("now", now).apply { if (spoken) put("voice", true) })
         try {
             return loop(start)
         } catch (e: CancellationException) {

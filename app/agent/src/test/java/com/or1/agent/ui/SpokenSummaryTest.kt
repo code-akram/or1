@@ -62,7 +62,29 @@ class SpokenSummaryTest {
 
     @Test fun mentions() {
         assertTrue(Mentions.covered("Set a 10 minute timer", "Ten-minute timer, starting now: 10 minutes."))
+        assertTrue(Mentions.covered("Set a 3-minute timer", "Timer set for three minutes."))
         assertFalse(Mentions.covered("Added “Dentist” to the calendar", "Sure."))
         assertFalse(Mentions.covered("Turned on", "Turned on"))
+    }
+
+    @Test fun withAReplyAtMostOneUnmentionedEffectAndTwoSentences() {
+        val t = turn(
+            "All set. Wi-Fi and dark mode are on. Your brightness is at forty percent. Anything else?",
+            effect("Turned on Wi-Fi"), effect("Set media volume to 3"), effect("Turned on dark mode"),
+        )
+        assertEquals("Done. Set media volume to 3. All set. Wi-Fi and dark mode are on.", spokenSummary(t))
+    }
+
+    @Test fun timeZonesYearsLinksAndAsidesAreNotRead() {
+        assertEquals(
+            "Your timer ends at 14:25.",
+            spokenSummary(turn("Your timer ends at 14:25:00 GMT+04:00 (in 10 minutes).")),
+        )
+        assertEquals("It's Monday, 12 October, 2:50 AM.", Speakable.tidy("It's Monday, 12 October 2026, 2:50 AM GST.", 2026))
+        assertEquals("Dentist on Oct 14 at 9:30.", Speakable.tidy("Dentist on Oct 14, 2026 at 9:30 +04.", 2026))
+        assertEquals("It opened the link.", Speakable.tidy("It opened https://example.com/a?b=c.", 2026))
+        assertEquals("Alarm set for 7:00 AM.", Speakable.tidy("Alarm set for 7:00 AM.", 2026))
+        assertEquals("It was built in 2026.", Speakable.tidy("It was built in 2026.", 2026))
+        assertEquals("The time is 3:10 PM.", Speakable.tidy("The time is 3:10 PM UTC.", 2026))
     }
 }

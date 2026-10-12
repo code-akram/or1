@@ -87,14 +87,16 @@ class Agent:
         with self.log_path.open("a") as f:
             f.write(json.dumps(record, default=str) + "\n")
 
-    def send(self, text: str) -> str:
-        """Handle one user message to completion and return the final reply text."""
+    def send(self, text: str, voice: bool = False) -> str:
+        """Handle one user message to completion and return the final reply text. `voice`: it was spoken and the reply
+        will be read aloud (marked [Voice], see the prompt)."""
         start = len(self.messages)
         # The phone's local time rides on each message (not the system prompt, which must stay byte-stable for the
         # cache), so date-relative requests don't spend a call on `device get`.
         now = adb.shell("date '+%a %d %b %Y %H:%M %Z'").strip()
-        self.messages.append({"role": "user", "content": f"[Now: {now}] {text}"})
-        self._log({"t": time.time(), "user": text, "now": now})
+        mark = " [Voice]" if voice else ""
+        self.messages.append({"role": "user", "content": f"[Now: {now}]{mark} {text}"})
+        self._log({"t": time.time(), "user": text, "now": now, **({"voice": True} if voice else {})})
         try:
             return self._loop(start)
         except KeyboardInterrupt:

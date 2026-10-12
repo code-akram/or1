@@ -252,9 +252,12 @@ object AgentHub {
     /**
      * Queue a user message. `requestId` makes the reply readable from replies.jsonl (debug driver). `context` goes to
      * the model after the text but isn't shown in the chat (an undo's receipt); `done` gets whether the request failed
-     * or was stopped.
+     * or was stopped. `spoken`: the request was spoken and its reply will be read aloud (a short reply, see [Agent.send]).
      */
-    fun submit(text: String, requestId: String? = null, fresh: Boolean = false, context: String? = null, done: ((Boolean) -> Unit)? = null) {
+    fun submit(
+        text: String, requestId: String? = null, fresh: Boolean = false, context: String? = null, spoken: Boolean = false,
+        done: ((Boolean) -> Unit)? = null,
+    ) {
         if (_routineBusy.value) _items.update { it + ChatItem.Info(ids.incrementAndGet(), "A routine is running. Your request starts when it's done.") }
         scope.launch {
             var ok = false
@@ -274,7 +277,7 @@ object AgentHub {
                     val a = agent()
                     effectSource = Triple(if (requestId != null) "eval" else "chat", a.transcriptFile.nameWithoutExtension, null)
                     val outcome = try {
-                        run(if (context != null) "$text\n\n$context" else text, a, _busy)
+                        run(if (context != null) "$text\n\n$context" else text, a, _busy, spoken)
                     } finally {
                         lastChatEnd = System.currentTimeMillis()
                         lastRequestEnd = lastChatEnd
@@ -391,7 +394,7 @@ object AgentHub {
     }
 
     /** One request through [a]; the caller holds [lock] and has added the user item. */
-    private suspend fun run(text: String, a: Agent, busy: MutableStateFlow<Boolean>): Outcome {
+    private suspend fun run(text: String, a: Agent, busy: MutableStateFlow<Boolean>, spoken: Boolean = false): Outcome {
         framesThisAct = 0
         busy.value = true
         val started = System.currentTimeMillis()
@@ -403,7 +406,7 @@ object AgentHub {
             val before = a.usage.cost
             val beforeRequests = a.usage.requests
             try {
-                a.send(text)
+                a.send(text, spoken)
             } finally {
                 cost = a.usage.cost - before
                 requests = a.usage.requests - beforeRequests

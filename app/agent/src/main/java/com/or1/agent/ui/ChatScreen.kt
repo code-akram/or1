@@ -164,7 +164,8 @@ fun ChatScreen() {
 
         fun send(message: String) {
             if (message.isBlank() || busy) return
-            AgentHub.submit(message.trim())
+            // Said by push-to-talk or dictation with Speak replies on: the reply will be spoken, so it's kept short.
+            AgentHub.submit(message.trim(), spoken = VoiceReplies.pending?.text == message.trim())
             input.clear()
             // The agent takes a while: give the screen back to the conversation.
             expanded = false
@@ -323,7 +324,7 @@ fun ChatScreen() {
                             }
                             evidence?.let { EvidenceViewer(it, onClose = { evidence = null }) }
                             TriageSheet(triageOpen, onClose = { triageOpen = false })
-                            VoiceModeHost(voiceOpen, onClose = { voiceOpen = false })
+                            VoiceModeHost(voiceOpen, onClose = { voiceOpen = false }, actions = cardActions)
                         }
                     }
                 }

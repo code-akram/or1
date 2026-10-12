@@ -33,10 +33,12 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -58,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import com.or1.agent.AgentHub
 import com.or1.agent.ChatItem
 import com.or1.agent.ListenState
+import com.or1.agent.Sentences
 import com.or1.agent.SpeechInput
 import com.or1.agent.SpeechOutput
 import com.or1.agent.UndoState
@@ -108,14 +111,17 @@ object VoiceReplies {
 /**
  * What or1 says for a finished turn: the reply's prose, after a short phrase per effect the reply doesn't already
  * mention ("Done. Turned on Do Not Disturb."). Irreversible effects are always said, marked "irreversible". Undone
- * effects are left out; past three, the rest are counted. Without a reply, the turn's last note (why it stopped).
+ * effects are left out. Without a reply, the turn's last note (why it stopped), and up to three effects with the rest
+ * counted; with one, at most one unmentioned effect and the reply's first two sentences (the card and receipt carry
+ * the rest). Everything goes through [Speakable.tidy].
  */
 fun spokenSummary(turn: Turn): String {
     val reply = turn.reply?.text?.trim().orEmpty()
-    val phrases = turn.effects.map { it.effect }
+    val effects = turn.effects.map { it.effect }
         .filter { it.state != UndoState.UNDONE }
         .filter { it.tier == UndoTier.NONE || !Mentions.covered(it.label, reply) }
-        .map { e -> e.label.trim().trimEnd('.') + if (e.tier == UndoTier.NONE) ", irreversible." else "." }
+    val kept = if (reply.isEmpty()) effects else effects.filter { it.tier == UndoTier.NONE } + effects.filter { it.tier != UndoTier.NONE }.take(1)
+    val phrases = kept.map { e -> e.label.trim().trimEnd('.') + if (e.tier == UndoTier.NONE) ", irreversible." else "." }
     val parts = mutableListOf<String>()
     if (phrases.isNotEmpty()) {
         parts += "Done."
@@ -123,10 +129,36 @@ fun spokenSummary(turn: Turn): String {
         if (phrases.size > 3) parts += if (phrases.size == 4) "And one more change." else "And ${phrases.size - 3} more changes."
     }
     when {
-        reply.isNotEmpty() -> parts += reply
+        reply.isNotEmpty() -> parts += Sentences.split(Speakable.tidy(reply)).take(2).joinToString(" ")
         parts.isEmpty() -> parts += turn.infos.lastOrNull()?.text?.trim()?.ifBlank { null } ?: "Sorry, I didn't get an answer."
     }
-    return parts.joinToString(" ")
+    return Speakable.tidy(parts.joinToString(" "))
+}
+
+/**
+ * Text made for the ear: time zones, seconds on clock times, the current year, links and parenthesised asides out
+ * (they're on the screen, and a voice reading "GMT plus four" is noise).
+ */
+internal object Speakable {
+    private val zoneOffset = Regex("""\s*\b(?:GMT|UTC)\s*[+\-−]\s*\d{1,2}(?::?\d{2})?\b""")
+    private val zoneName = Regex("""\s*\b(?:GMT|UTC)\b""")
+    /** "07:30 GST", "7:30 PM +04": an abbreviation or offset right after a clock time. */
+    private val zoneAfterTime = Regex("""(\b\d{1,2}:\d{2}(?:\s*[AaPp]\.?[Mm]\.?)?)\s+(?:[A-Z]{3,5}\b(?<!\b(?:AM|PM))|[+\-−]\d{2}(?::?\d{2})?\b)""")
+    private val seconds = Regex("""\b(\d{1,2}:\d{2}):\d{2}\b""")
+    private val link = Regex("""\bhttps?://\S*[^\s.,!?;:)]""")
+    private val aside = Regex("""\s*\([^()]*\)""")
+
+    fun tidy(text: String, year: Int = java.time.Year.now().value): String = text
+        .replace(link, "the link")
+        .replace(aside, "")
+        .replace(seconds, "$1")
+        .replace(zoneOffset, "")
+        .replace(zoneName, "")
+        .replace(zoneAfterTime, "$1")
+        .replace(Regex("""\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?(?:\s+\d{1,2}(?:st|nd|rd|th)?)?),?\s+$year\b"""), "$1")
+        .replace(Regex("""\s+([,.!?;:])"""), "$1")
+        .replace(Regex("""\s{2,}"""), " ")
+        .trim()
 }
 
 /** Does a reply already say what an effect label says? Most of the label's telling words appear in it. */
@@ -136,8 +168,21 @@ internal object Mentions {
         "removed", "saved", "deleted", "ran", "opened", "tapped", "toggled", "note", "on", "off", "to", "of", "in", "at", "a", "an",
     )
 
+    private val numbers = listOf(
+        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen",
+        "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty",
+    ).withIndex().associate { (i, w) -> w to i.toString() } + mapOf("thirty" to "30", "forty" to "40", "fifty" to "50", "sixty" to "60")
+
+    /** Telling words, as digits ("three" = "3", "07" = "7") and singular ("minutes" = "minute"). */
     fun words(text: String): Set<String> = Regex("[\\p{L}\\p{N}]+").findAll(text.lowercase()).map { m ->
-        m.value.let { w -> if (w.all(Char::isDigit)) w.trimStart('0').ifEmpty { "0" } else w }
+        m.value.let { w ->
+            when {
+                w.all(Char::isDigit) -> w.trimStart('0').ifEmpty { "0" }
+                w in numbers -> numbers.getValue(w)
+                w.length > 3 && w.endsWith("s") && !w.endsWith("ss") -> w.dropLast(1)
+                else -> w
+            }
+        }
     }.filter { it !in plain }.toSet()
 
     fun covered(label: String, reply: String): Boolean {
@@ -150,10 +195,11 @@ internal object Mentions {
 
 /**
  * Voice mode over the chat while [open] (the rail stays above it), and, whenever it's closed, the chat's spoken
- * replies (see [VoicePrefs]).
+ * replies (see [VoicePrefs]). [actions] are the stream's card actions (routines, triage, the viewer); voice mode closes
+ * before each.
  */
 @Composable
-fun VoiceModeHost(open: Boolean, onClose: () -> Unit) {
+fun VoiceModeHost(open: Boolean, onClose: () -> Unit, actions: CardActions = CardActions()) {
     val context = LocalContext.current
     remember { VoicePrefs.load(context.applicationContext) }
     LaunchedEffect(open) {
@@ -174,7 +220,11 @@ fun VoiceModeHost(open: Boolean, onClose: () -> Unit) {
         enter = fadeIn(Motion.enter()) + slideInVertically(Motion.enter()) { slide },
         exit = ExitTransition.None,
     ) {
-        VoiceMode(onClose)
+        val closing = remember(actions) {
+            fun wrap(a: (() -> Unit)?) = a?.let { { onClose(); it() } }
+            CardActions(wrap(actions.openRoutines), wrap(actions.openTriage), wrap(actions.openViewer))
+        }
+        CompositionLocalProvider(LocalCardActions provides closing) { VoiceMode(onClose) }
     }
 }
 
@@ -195,10 +245,11 @@ private const val QUIET_MS = 8_000L
 
 /**
  * Hands-free: listen → ask or1 → speak the reply ([spokenSummary]) → listen again, until Stop or [QUIET_MS] without
- * words, then back to the chat. Full screen on ink0: the last thing the user said (small, text2), or1's reply in
- * Spoken type, only the sentence being spoken (text) and the one before (text2), the meter (`live` listening, `ember`
- * speaking, the march while or1 works) and one 72 dp Stop. A tap anywhere interrupts speech and listens (or, while
- * listening, finishes the utterance).
+ * words, then back to the chat. Full screen on ink0: the Now strip, the last thing the user said (small, text2), or1's
+ * reply in Spoken type, only the sentence being spoken (text) and the one before (text2), the turn's newest result
+ * card (live: a timer counts down, Undo works), the meter (`live` listening, `ember` speaking, the march while or1
+ * works) and one 72 dp Stop. A tap anywhere else interrupts speech and listens (or, while listening, finishes the
+ * utterance).
  */
 @Composable
 private fun VoiceMode(onClose: () -> Unit) {
@@ -208,6 +259,8 @@ private fun VoiceMode(onClose: () -> Unit) {
     var phase by remember { mutableStateOf(Phase.LISTENING) }
     var heard by remember { mutableStateOf("") }
     var replyId by remember { mutableStateOf<String?>(null) }
+    // The turn whose result card shows (cleared when the next request is heard).
+    var turnKey by remember { mutableStateOf<Any?>(null) }
     // A reply shown without a voice (no TTS engine).
     var silentReply by remember { mutableStateOf<String?>(null) }
     var problem by remember { mutableStateOf<String?>(null) }
@@ -232,8 +285,10 @@ private fun VoiceMode(onClose: () -> Unit) {
                 is Heard.Words -> {
                     problem = null
                     heard = h.text
+                    turnKey = null
                     phase = Phase.WORKING
                     val turn = ask(h.text)
+                    turnKey = turn?.key
                     val id = "voice-${turn?.key ?: SystemClock.uptimeMillis()}"
                     replyId = id
                     phase = Phase.SPEAKING
@@ -278,11 +333,20 @@ private fun VoiceMode(onClose: () -> Unit) {
             ),
     ) {
         Column(Modifier.fillMaxSize().systemBarsPadding().padding(horizontal = 24.dp)) {
-            Spacer(Modifier.height(24.dp))
+            val actions = LocalCardActions.current
+            Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.CenterStart) {
+                NowStrip(onTriage = { actions.openTriage?.invoke() }, onRoutine = { actions.openRoutines?.invoke() })
+            }
+            Spacer(Modifier.height(8.dp))
             UserLine(input, phase, heard)
             Spacer(Modifier.weight(1f))
-            ReplyLines(output, replyId, silentReply)
-            Spacer(Modifier.height(32.dp))
+            val card = rememberVoiceCard(turnKey)
+            ReplyLines(output, replyId, silentReply, compact = card != null)
+            card?.let {
+                Spacer(Modifier.height(16.dp))
+                key(it.key) { ResultCardView(it, live = true) }
+            }
+            Spacer(Modifier.height(if (card != null) 20.dp else 32.dp))
             Box(Modifier.fillMaxWidth().height(VOICE_BLOCK * 9), contentAlignment = Alignment.Center) {
                 when (phase) {
                     Phase.LISTENING -> LevelMeter({ input.level.value }, Palette.Live, block = VOICE_BLOCK)
@@ -310,6 +374,18 @@ private fun VoiceMode(onClose: () -> Unit) {
     }
 }
 
+/**
+ * The newest result card of the voice turn [turnKey] (one: the screen is the reply's), following the chat's items so
+ * its Undo and state stay current.
+ */
+@Composable
+private fun rememberVoiceCard(turnKey: Any?): ResultCard? {
+    if (turnKey == null) return null
+    val items by AgentHub.items.collectAsState()
+    val turn = remember(items, turnKey) { groupTurns(items).lastOrNull { it.key == turnKey } } ?: return null
+    return remember(turn) { ResultCards.of(turn).lastOrNull() }
+}
+
 /** Voice mode's blocks: bigger than a card's, it's the whole screen. */
 private val VOICE_BLOCK = 6.dp
 
@@ -332,7 +408,7 @@ private fun UserLine(input: SpeechInput, phase: Phase, heard: String) {
  * [SpeechOutput.progress]; both text2 once speech stops. Coarse semantics: the whole reply, once.
  */
 @Composable
-private fun ReplyLines(output: SpeechOutput, replyId: String?, silentReply: String?) {
+private fun ReplyLines(output: SpeechOutput, replyId: String?, silentReply: String?, compact: Boolean) {
     val progress by output.progress.collectAsState()
     val p = progress.takeIf { replyId != null && it.id == replyId }
     val previous = if (silentReply == null) p?.sentences?.getOrNull(p.index - 1) else null
@@ -342,9 +418,10 @@ private fun ReplyLines(output: SpeechOutput, replyId: String?, silentReply: Stri
         Modifier.fillMaxWidth().clearAndSetSemantics { contentDescription = silentReply ?: p?.sentences?.joinToString(" ").orEmpty() },
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        previous?.let { Text(it, style = Type.Spoken.copy(color = Palette.Text2), maxLines = 3, overflow = TextOverflow.Ellipsis) }
+        // With a card below, fewer lines: the card says the rest.
+        previous?.let { Text(it, style = Type.Spoken.copy(color = Palette.Text2), maxLines = if (compact) 2 else 3, overflow = TextOverflow.Ellipsis) }
         current?.let {
-            Text(it, style = Type.Spoken.copy(color = if (speaking) Palette.Text else Palette.Text2), maxLines = 8, overflow = TextOverflow.Ellipsis)
+            Text(it, style = Type.Spoken.copy(color = if (speaking) Palette.Text else Palette.Text2), maxLines = if (compact) 4 else 8, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -398,7 +475,7 @@ private suspend fun listen(input: SpeechInput, output: SpeechOutput, quietSince:
 private suspend fun ask(text: String): Turn? {
     val mark = AgentHub.items.value.maxOfOrNull { it.id } ?: 0L
     val done = CompletableDeferred<Unit>()
-    AgentHub.submit(text, done = { done.complete(Unit) })
+    AgentHub.submit(text, spoken = true, done = { done.complete(Unit) })
     done.await()
     return groupTurns(AgentHub.items.value).lastOrNull { (it.user?.id ?: -1) > mark && it.user?.text == text }
 }
