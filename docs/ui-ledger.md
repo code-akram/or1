@@ -35,7 +35,7 @@ Rejected: a tile dashboard (recomposition cost on 4×A53, configuration burden, 
 | Activity (Today) | Drawer → Today: every side effect across chats and routines, newest first, with undo state | Drawer | Back |
 | What or1 knows | Drawer → Memory: memory notes, editable/deletable | Drawer | Back |
 | Agent screen | `WorkViewer` | Thumbnail / chip / "Watch or take over" | Close, Ask or1, tap `or1`, Back |
-| Voice mode | Full screen: Now strip, spoken reply large, live card, one stop target | Hold round button + slide up to lock | Tap, silence timeout |
+| Voice mode | Full screen: Now strip, spoken reply large, live card, one stop target | Tap the round button (or hold + slide up) | Tap, silence timeout |
 
 Navigation rules (no nav bar, flaky digitiser):
 1. **The wordmark is the home button.** `or1` in the rail (≥48 dp hit area) always returns to Now: closes sheets,
@@ -129,7 +129,7 @@ churn the accessibility semantics tree (the agent's accessibility service is alw
 
 ## 6. Voice-ready
 
-- The round primary button is push-to-talk: hold to listen, release to send, slide up 56 dp to lock (voice mode).
+- The round primary button: a tap opens voice mode; hold to listen, release to send (push-to-talk), slide up 56 dp for voice mode too.
 - **Listening:** 9 columns of 3 dp blocks at 100 ms in `live`, from `AudioRecord` RMS; text arrives in the field.
 - **Working:** the march. **Speaking:** the same columns in `ember` from the TTS amplitude; the spoken sentence in
   `text`, the rest in `text2`.

@@ -79,17 +79,17 @@ private enum class PrimaryAction { VOICE, SEND, STOP }
 /** What the composer's voice is doing: nothing, push-to-talk on the round button, or dictating into the field. */
 private enum class VoiceUse { NONE, HOLD, DICTATE }
 
-/** A quiet line in the composer ("Hold to talk", why voice input isn't ready) for [ms]. */
+/** A quiet line in the composer (why voice input isn't ready, "Didn't catch that.") for [ms]. */
 private data class Note(val text: String, val ms: Long, val at: Long = SystemClock.uptimeMillis())
 
 /**
  * Composer, after both references: a single pill while idle (keyboard closed, nothing typed), and a card with the
  * field on top and a row of controls underneath while composing.
  *
- * Voice (docs/ui-ledger.md §6): with nothing typed, the round button is push-to-talk: hold to listen (the level meter
- * replaces the placeholder), release to send, slide up 56 dp for hands-free voice mode ([onVoiceMode]), slide left to
- * cancel. A press under 400 ms is a tap and just says "Hold to talk". While or1 works it's Stop, and holding it stops
- * or1 and listens. The mic dictates into the field (tap again to finish) and never sends.
+ * Voice (docs/ui-ledger.md §6): with nothing typed, a tap on the round button opens hands-free voice mode
+ * ([onVoiceMode]); it's also push-to-talk: hold to listen (the level meter replaces the placeholder), release to send,
+ * slide up 56 dp for voice mode too, slide left to cancel. Listening starts on the press either way, so voice mode
+ * carries on with words said while tapping. While or1 works it's Stop, and holding it stops or1 and listens. The mic dictates into the field (tap again to finish) and never sends.
  *
  * Wake phrase ([VoicePrefs.wakePhrase]): while [wakeAllowed] (the home in front, nothing over it) and the composer is
  * an idle pill, it listens in the background, one utterance after another, for [WakePhrase]. Hearing it opens voice
@@ -233,10 +233,11 @@ fun Composer(
         },
         onTap = {
             if (use == VoiceUse.HOLD) {
-                dropped = true
+                // A tap is the way into voice mode, which carries on with the listening the press started.
                 held = false
-                speech.cancel()
-                note = Note("Hold to talk", 1200)
+                dropped = true
+                use = VoiceUse.NONE
+                onVoiceMode()
             } else if (busyNow) {
                 onStop()
             }
@@ -498,7 +499,7 @@ private fun PrimaryButton(action: PrimaryAction, onClick: () -> Unit) {
 private fun primaryIcon(action: PrimaryAction): Pair<ImageVector, String> = when (action) {
     PrimaryAction.STOP -> Icons.Stop to "Stop"
     PrimaryAction.SEND -> Icons.ArrowUp to "Send"
-    PrimaryAction.VOICE -> Icons.Waveform to "Hold to talk"
+    PrimaryAction.VOICE -> Icons.Waveform to "Voice mode (hold to talk)"
 }
 
 /** What a press on the round button does; see [PushToTalkButton]. */
@@ -507,7 +508,7 @@ private class PushToTalk(
     val onDown: () -> Unit,
     /** Still down after [HOLD_MS]: a hold. */
     val onHold: () -> Unit,
-    /** Up before [HOLD_MS]. */
+    /** Up before [HOLD_MS]: voice mode (or Stop while or1 works). */
     val onTap: () -> Unit,
     /** Up after a hold: send. */
     val onRelease: () -> Unit,

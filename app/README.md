@@ -20,9 +20,10 @@ the chat never leaves the screen.
   routines: the drawer without the edge swipe), an "Agent screen" chip (opens the work screen viewer; its icon marches
   while or1 works), mic and the round button (push-to-talk / send / stop). The pill and card swap without a fade
   (AnimatedContent's fade left the re-created native field undrawn). Voice:
-  - Round button, nothing typed: **push-to-talk**. Listening starts on touch-down (the first word isn't lost); hold and
-    release sends the final text; slide up 56 dp opens voice mode carrying on with the utterance; slide left cancels.
-    Under 400 ms is a tap: "Hold to talk" for 1.2 s. While or1 works it's Stop; holding it stops or1, then listens.
+  - Round button, nothing typed: a **tap opens voice mode**; a hold is **push-to-talk**. Listening starts on touch-down
+    (the first word isn't lost); hold and release sends the final text; slide up 56 dp also opens voice mode; slide left
+    cancels. A tap (under 400 ms) opens voice mode, which carries on with the listening the press started. While or1
+    works it's Stop; holding it stops or1, then listens.
     It reads raw MotionEvents (`pointerInteropFilter`): this digitiser cancels touches that are still down, and a
     cancel followed by a new down within 600 ms continues the same press (no new down: a lift at the cancel).
     Accessibility services get a plain click (opens voice mode).
