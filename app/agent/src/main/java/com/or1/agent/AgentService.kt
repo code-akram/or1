@@ -115,6 +115,8 @@ class DebugReceiver : BroadcastReceiver() {
             text,
             requestId = intent.getStringExtra("id"),
             fresh = intent.getBooleanExtra("fresh", false),
+            // As if spoken in voice mode (low effort, short reply), for evals of voice requests.
+            spoken = intent.getBooleanExtra("voice", false),
         )
     }
 }

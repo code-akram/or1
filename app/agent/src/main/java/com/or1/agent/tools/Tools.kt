@@ -46,7 +46,7 @@ class Tools(context: Context) {
         "calendar" -> calendar.run(args)
         "contacts" -> contacts.run(args)
         "routines" -> com.or1.agent.Routines.tool(args)
-        "media" -> media.run(args)
+        "media" -> media.run(args, screen)
         else -> throw IllegalArgumentException("Unknown tool '$name'.")
     }
 }

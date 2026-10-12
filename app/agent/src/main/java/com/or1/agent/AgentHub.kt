@@ -189,6 +189,32 @@ object AgentHub {
             reloadRoutineActs()
         }
         NowState.init(appContext)
+        scope.launch { rebindAccessibility() }
+    }
+
+    /**
+     * After or1 crashes, Android 13 marks its accessibility service crashed and doesn't bind it again until the setting
+     * changes, so every screen read fails. If it's enabled but still not connected a few seconds after start, rewrite
+     * the setting (or1 holds WRITE_SECURE_SETTINGS), which binds it again.
+     */
+    private suspend fun rebindAccessibility() {
+        kotlinx.coroutines.delay(5_000)
+        if (A11yService.instance != null) return
+        val key = android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        val resolver = appContext.contentResolver
+        val enabled = android.provider.Settings.Secure.getString(resolver, key).orEmpty()
+        val ours = "${appContext.packageName}/${A11yService::class.java.name}"
+        if (ours !in enabled) return
+        Log.w(TAG, "accessibility service enabled but not connected (crashed earlier): binding it again")
+        try {
+            android.provider.Settings.Secure.putString(resolver, key, enabled.split(':').filter { it != ours }.joinToString(":"))
+            // Apart, so the system sees the service leave the list (that clears its crashed mark) and come back.
+            kotlinx.coroutines.delay(1_000)
+        } catch (e: Exception) {
+            Log.e(TAG, "could not rebind the accessibility service", e)
+        } finally {
+            runCatching { android.provider.Settings.Secure.putString(resolver, key, enabled) }
+        }
     }
 
     /** Re-reads today's finished runs from the routine transcripts into [routineActs]. */

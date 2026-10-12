@@ -60,8 +60,10 @@ tools.append({
     "name": "media",
     "description": (
         "Songs and videos through the apps' media sessions, without their screens. status: what each media app is "
-        "playing (title, playing or paused, and whether it's on its own screen). play, pause, next, previous: control "
-        "the media that's playing (or `package`). Check the result: some apps (YouTube outside a playlist) ignore next "
+        "playing (title, playing or paused, and whether it's on its own screen). play with `query`: searches an app "
+        "(`package`, default YouTube) and starts the top result in one step; use it whenever the user names something "
+        "to play, instead of opening the app and searching. play, pause, next, previous without `query`: control the "
+        "media that's playing (or `package`). Check the result: some apps (YouTube outside a playlist) ignore next "
         "and previous; then open the app."
     ),
     "input_schema": {
@@ -69,6 +71,7 @@ tools.append({
         "properties": {
             "action": {"type": "string", "enum": ["status", "play", "pause", "next", "previous"]},
             "package": {"type": "string"},
+            "query": {"type": "string", "description": "With play: what to search for and play, e.g. a song or video title."},
         },
         "required": ["action"],
         "additionalProperties": False,
@@ -83,9 +86,9 @@ In shell, target it with `am start --display $OR1_DISPLAY ...` and `input -d $OR
 key home shows an empty screen and recents is not available.
 
 Media: a song or video the user asks for keeps playing after your turn on its own screen (the screen tool notes it), \
-so your work screen is free and other requests (a timer, a message) don't interrupt it; the user hears it. Control \
-it with the media tool (status, pause, play, next); open the app only when you need its screen (to search or pick \
-something else), which brings it back to your work screen. To stop a ringing or running timer use clock stop_timer, \
+so your work screen is free and other requests (a timer, a message) don't interrupt it; the user hears it. To play something the user names, use media play with a \
+query. Control what plays with the media tool (status, pause, play, next); open the app only when you need its \
+screen (to pick something else), which brings it back to your work screen. To stop a ringing or running timer use clock stop_timer, \
 not the Clock app.
 
 Routine runs: a message starting with [Routine ...] was started by a routine, not typed by the user just now. Do what \

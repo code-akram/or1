@@ -21,14 +21,14 @@ PHONE_PKG = "com.or1.agent"
 PHONE_TIMEOUT = 600
 
 
-def run_on_phone(task: str, request_id: str) -> dict:
+def run_on_phone(task: str, request_id: str, voice: bool = False) -> dict:
     """Send one task to the on-device agent through its debug receiver and wait for its reply record."""
     # Screen actions fail on the lock screen; the test phone has a swipe-only keyguard. Home brings the chat (the HOME
     # app) back in front, e.g. after a reinstall killed it, so every task starts from the same screen.
     adb.shell("input keyevent KEYCODE_WAKEUP; wm dismiss-keyguard; input keyevent KEYCODE_HOME")
     adb.shell(
         f"am broadcast -n {PHONE_PKG}/.DebugReceiver --es text {shlex.quote(task)} --es id {request_id} "
-        "--ez fresh true"
+        "--ez fresh true" + (" --ez voice true" if voice else "")
     )
     deadline = time.time() + PHONE_TIMEOUT
     while time.time() < deadline:
@@ -93,6 +93,8 @@ def main() -> None:
     parser.add_argument("--no-judge", action="store_true", help="skip the y/n prompt; judge later from the logs")
     parser.add_argument("--target", choices=["host", "phone"], default="host",
                         help="host: this prototype drives the phone over ADB; phone: the on-device agent app")
+    parser.add_argument("--voice", action="store_true",
+                        help="phone only: send each task as a spoken request (voice effort, short replies)")
     args = parser.parse_args()
 
     if args.target == "host":
@@ -100,7 +102,7 @@ def main() -> None:
     adb.check_device()
     tasks = [l.strip() for l in args.tasks.read_text().splitlines() if l.strip() and not l.startswith("#")]
     selected = {int(n) for n in args.only.split(",")} if args.only else None
-    out_path = RUNS_DIR / time.strftime(f"eval-%Y%m%d-%H%M%S-{args.model}-{args.effort}.jsonl")
+    out_path = RUNS_DIR / time.strftime(f"eval-%Y%m%d-%H%M%S-{args.model}-{'voice' if args.voice else args.effort}.jsonl")
     results = []
     saved = save_device_settings() if args.target == "phone" else {}
 
@@ -113,7 +115,7 @@ def main() -> None:
             check = checks.CHECKS.get(task) if args.target == "phone" else None
             snapshot = check.before() if check and check.before else None
             if args.target == "phone":
-                r = run_on_phone(task, f"eval-{int(time.time())}-{i}")
+                r = run_on_phone(task, f"eval-{int(time.time())}-{i}", voice=args.voice)
                 reply, seconds = r["reply"], r["seconds"]
                 usage = {"requests": r["requests"], "cost": round(r["cost"], 5), "output_tokens": None, "log": "phone"}
             else:

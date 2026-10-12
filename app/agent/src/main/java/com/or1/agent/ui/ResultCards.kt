@@ -196,8 +196,9 @@ object ResultCards {
             ?.let { val args = callArgs(it.detail); out += it.id to ResultCard.CalendarDay(it.id, args["date"], args["days"]) }
         // What the work display was left showing: a media app gets the live crop.
         val screens = calls.filter { callTool(it.detail) in SCREEN_TOOLS }
-        screens.lastOrNull()?.let { last ->
-            val pkg = ScreenDump.foreground(last.result!!)
+        // `media play` with a query leaves the app it started playing in front too.
+        (screens + calls.filter { callTool(it.detail) == "media" }).maxByOrNull { it.id }?.let { last ->
+            val pkg = ScreenDump.foreground(last.result!!) ?: mediaStarted(last.result)
             if (pkg != null && isMedia(pkg)) out += last.id to ResultCard.Media(last.id, pkg)
         }
         // The last message read in Gmail.
@@ -217,6 +218,7 @@ object ResultCards {
         tool == "calendar" && isCalendarCard(args, result) -> CARD_HINT
         tool == "contacts" && args["action"] == "find" && parseFound(result).isNotEmpty() -> CARD_HINT
         tool == "clock" && args["action"] in setOf("set_timer", "set_alarm") -> CARD_HINT
+        tool == "media" && mediaStarted(result) != null -> CARD_HINT
         // Gmail is often read mid-task, and "reply" is a button there: a conditional hint without the word.
         tool in SCREEN_TOOLS && emailRead(result) != null -> EMAIL_HINT
         else -> null
@@ -224,6 +226,10 @@ object ResultCards {
 
     const val CARD_HINT = "\n\n[The user sees this as a card. Reply in one short sentence.]"
     const val EMAIL_HINT = "\n\n[The user sees this email as a card. If it is your answer, keep your message to one short sentence.]"
+
+    /** The app a `media play` with a query started (“Playing “…” in YouTube (com.google.android.youtube), …”), if any. */
+    private fun mediaStarted(result: String): String? = MEDIA_STARTED.find(result)?.groupValues?.get(1)
+    private val MEDIA_STARTED = Regex("^Playing .* \\(([A-Za-z0-9_.]+)\\), the top result for ")
 
     /** `calendar list` that found something (an empty day gets no card: the reply says so). */
     private fun isCalendarCard(args: Map<String, String>, result: String) = args["action"] == "list" && result.startsWith("Events from")

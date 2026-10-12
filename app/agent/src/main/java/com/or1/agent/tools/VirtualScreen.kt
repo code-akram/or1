@@ -197,6 +197,7 @@ class VirtualScreen(private val name: String) {
      */
     private fun onFrame(r: ImageReader) {
         val image = try { r.acquireLatestImage() } catch (e: IllegalStateException) { null } ?: return
+        lastFrameAt = SystemClock.uptimeMillis()
         held?.close()
         held = image
         dirty = true
@@ -206,6 +207,29 @@ class VirtualScreen(private val name: String) {
     }
 
     private val convertRunnable = Runnable { convert() }
+
+    @Volatile
+    private var lastFrameAt = 0L
+
+    /**
+     * Waits until the display stops drawing: it only produces a frame when something on it changes, so no new frame
+     * for [QUIET_MS] (after at least [MIN_SETTLE_MS], for the app to react) means the screen settled. Returns early
+     * after [maxMs] (a video or spinner never stops drawing) and waits the whole [maxMs] when frames can't be seen
+     * (the viewer renders them, or the display is parked).
+     */
+    suspend fun settle(maxMs: Long) {
+        val start = SystemClock.uptimeMillis()
+        if (viewerAttached || parked || display == null) {
+            kotlinx.coroutines.delay(maxMs)
+            return
+        }
+        while (true) {
+            val now = SystemClock.uptimeMillis()
+            if (now - start >= maxMs) return
+            if (now - start >= MIN_SETTLE_MS && now - lastFrameAt >= QUIET_MS) return
+            kotlinx.coroutines.delay(SETTLE_POLL_MS)
+        }
+    }
 
     private fun convert() {
         val image = held ?: return
@@ -244,6 +268,9 @@ class VirtualScreen(private val name: String) {
         const val PREVIEW_INTERVAL_MS = 500L
         const val FAST_PREVIEW_MS = 400L
         private const val WAKE_MS = 10 * 60_000L
+        private const val MIN_SETTLE_MS = 200L
+        private const val QUIET_MS = 250L
+        private const val SETTLE_POLL_MS = 25L
 
         private const val FLAG_PUBLIC = 1
         private const val FLAG_SECURE = 4

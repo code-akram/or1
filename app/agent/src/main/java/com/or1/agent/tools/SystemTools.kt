@@ -26,6 +26,9 @@ import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
 
+/** The longest `open` waits for the new app's screen to settle (see [HiddenDisplay.settle]). */
+private const val OPEN_SETTLE_MS = 600L
+
 /** Device state, alarms, apps, notifications and app launching, through platform APIs (no UI driving). */
 class SystemTools(private val context: Context) {
     private val audio = context.getSystemService(AudioManager::class.java)
@@ -306,7 +309,7 @@ class SystemTools(private val context: Context) {
         val expect = intent.resolveActivity(context.packageManager)?.packageName?.takeIf { it != "android" }
         if (HiddenDisplay.ensure() == null) screen.dismissShade()
         HiddenDisplay.launch(intent, expect)
-        delay(600)
+        HiddenDisplay.settle(OPEN_SETTLE_MS)
         return screen.screen(false)
     }
 }

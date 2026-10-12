@@ -23,6 +23,7 @@ import org.json.JSONObject
 
 private const val MAX_ELEMENTS = 150
 private const val SCREENSHOT_WIDTH = 360
+/** The longest an action waits for the screen to settle before reading it (usually far less: [HiddenDisplay.settle]). */
 private const val SETTLE_MS = 1000L
 
 /**
@@ -212,7 +213,7 @@ class ScreenTools(private val context: Context) {
             "key" -> key(service, args.optString("key"))
             else -> throw IllegalArgumentException("Unknown action '$action'.")
         }
-        delay(SETTLE_MS)
+        HiddenDisplay.settle(SETTLE_MS)
         return screen(false)
     }
 

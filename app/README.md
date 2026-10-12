@@ -143,6 +143,18 @@ thumbnail, viewer and screenshots instead of black (and screenshots of them go t
 - Taps, swipes and back are injected with `InputManager.injectInputEvent` on that display: accessibility
   gestures report success there but don't land. Screen reads clear the accessibility cache first (the
   service only subscribes to window events, so scrolls never invalidate it).
+- Settle: after `act` (at most 1 s) and `open` (at most 0.6 s) the tool waits until the display stops drawing
+  (`VirtualScreen.settle`: no new frame for 250 ms, after at least 200 ms) instead of a fixed delay; a virtual display
+  only produces frames when something on it changes. A playing video or spinner never stops, so those wait the full
+  time; so does the real screen and the viewer (its frames go to the viewer's surface, which or1 doesn't see).
+- `media play` with a `query` (`tools/MediaTool.kt`): one call instead of open, search, read and tap. It starts the
+  app's MEDIA_PLAY_FROM_SEARCH activity (else ACTION_SEARCH) in a fresh task on the work display; music apps play from
+  it, YouTube shows results, and the first video row there is clicked (`MediaSearch.pick`: a " - "-separated row with
+  a duration, not "Sponsored", not a Short, not a seek bar), only once the results page shows the query. It's clicked
+  through accessibility, not tapped: switching videos, YouTube shows the old player over the results for a moment.
+  Done when the session plays a new title (or the clicked one); a clicked video that hasn't started after 3 s gets a
+  session play. Measured: ~7 s from a cold YouTube, 4–9 s switching videos; a spoken "play the Dune trailer" took
+  9 s end to end with two model calls (was ~37 s and five calls).
 - Its own display group keeps it working while the phone is off or locked. A screen wake lock bound to the
   display keeps it awake during a request; at the end the display is parked (surface removed, apps stop)
   and the lock released.
@@ -364,7 +376,7 @@ run `uv run python scripts/export_agent_json.py` in `proto/`.
 cd ../proto && uv run or1-eval --target phone --no-judge
 ```
 
-Most tasks are checked automatically (see `proto/README.md` → Eval checks). This drives the on-device agent through `DebugReceiver` (it requires `android.permission.DUMP`, which only
+`--voice` sends each task as a spoken request (low effort, short replies). Most tasks are checked automatically (see `proto/README.md` → Eval checks). This drives the on-device agent through `DebugReceiver` (it requires `android.permission.DUMP`, which only
 shell and system hold). Afterwards, even if a task crashes, it clears the Clock app (no test timer or alarm
 keeps ringing), deletes the "Test Person" contact and the "Dentist" event, and reinstalls and re-enables Gallery
 (the last task uninstalls it; skip it with `--only`).
@@ -438,6 +450,9 @@ The user doesn't use apps on this phone; the agent does. The app closes the syst
   "[The user sees this as a card. Reply in one short sentence.]" appended for the model only (the chat and transcript
   keep the plain result), so the reply doesn't restate the card. Not for notifications (the reply must name what's
   waiting and flag planted instructions) nor routine runs (their reply is a notification, no card).
+- Effort: agent.json's (medium) for typed requests; spoken ones (`Agent.send(spoken = true)`, voice mode) use low,
+  so less reasoning before each step. `--ez voice true` on the DebugReceiver and `or1-eval --voice` send requests as
+  spoken.
 - Each user message starts with `[Now: <local time>]` (not the system prompt, which must stay byte-stable for the
   cache), so relative dates need no `device get` call.
 
@@ -466,3 +481,6 @@ latency (median 1.3 s per call); on the phone, a screen read takes ~0.2 s and op
   within seconds.
 - Force-stopping the agent (`am force-stop com.or1.agent`) makes Android drop its accessibility service from
   `enabled_accessibility_services`, so screen and act stop working until `provision.sh` (or `settings put`) re-enables it.
+- After or1 crashes, Android 13 can mark its accessibility service crashed and not bind it again until the setting
+  changes (seen 2026-10-12: every screen read failed). On start, if the service is enabled but not connected after
+  5 s, or1 rewrites the setting (out and back, 1 s apart) to rebind it (`AgentHub.rebindAccessibility`).

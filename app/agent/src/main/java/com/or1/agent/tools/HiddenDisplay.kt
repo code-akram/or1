@@ -239,6 +239,14 @@ object HiddenDisplay {
      */
     fun latestFrame(maxWaitMs: Long = 40): Bitmap? = work.latestFrame(maxWaitMs)
 
+    /**
+     * After an action: waits until the work display stops drawing, at most [maxMs] (see [VirtualScreen.settle]); the
+     * whole [maxMs] on the real screen, whose frames we don't see.
+     */
+    suspend fun settle(maxMs: Long) {
+        if (targetDisplay() == Display.DEFAULT_DISPLAY) kotlinx.coroutines.delay(maxMs) else work.settle(maxMs)
+    }
+
     /** The full-screen viewer renders straight from the display; the reader takes over again when it closes. */
     @Synchronized
     fun attachViewer(surface: Surface) {

@@ -29,6 +29,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 private const val MAX_STEPS = 30
+/** Model effort for spoken requests (typed ones use agent.json's). */
+private const val VOICE_EFFORT = "low"
 
 /** System prompt, tool schemas and model settings, exported from the host prototype (proto/scripts/export_agent_json.py). */
 class AgentConfig(val model: String, val effort: String, val system: String, val tools: List<Tool>) {
@@ -106,7 +108,7 @@ class Agent(
         messages += MessageParam.builder().role(MessageParam.Role.USER).content("[Now: $now]$mark $text").build()
         transcript.log(JSONObject().put("user", text).put("now", now).apply { if (spoken) put("voice", true) })
         try {
-            return loop(start)
+            return loop(start, if (spoken) VOICE_EFFORT else config.effort)
         } catch (e: CancellationException) {
             closeOpenToolCalls("Interrupted by the user before this ran.")
             throw e
@@ -125,7 +127,11 @@ class Agent(
         transcript.log(JSONObject().put("user", user).put("context_reply", assistant))
     }
 
-    private suspend fun loop(start: Int): String {
+    /**
+     * [effort]: spoken requests use [VOICE_EFFORT], so less reasoning before each step (the user is waiting to hear the
+     * answer).
+     */
+    private suspend fun loop(start: Int, effort: String): String {
         // Prompt caching, 1-hour TTL: an explicit breakpoint after the static tools + system prompt, plus top-level
         // automatic caching for the growing conversation. Both 1h: a 1-hour entry can't follow a 5-minute one.
         // Calls within one request are seconds apart, but the next chat message or routine run often comes 5-60 min later.
@@ -139,7 +145,7 @@ class Agent(
                 .tools(config.tools.map { com.anthropic.models.messages.ToolUnion.ofTool(it) })
                 .messages(messages.toList())
                 .thinking(ThinkingConfigAdaptive.builder().display(ThinkingConfigAdaptive.Display.SUMMARIZED).build())
-                .outputConfig(OutputConfig.builder().effort(effort(config.effort)).build())
+                .outputConfig(OutputConfig.builder().effort(effort(effort)).build())
                 .build()
             val started = SystemClock.elapsedRealtime()
             val response = stream(params)

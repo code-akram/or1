@@ -56,6 +56,14 @@ class LiveCardsTest {
         assertEquals(2L, card.callId)
     }
 
+    @Test fun mediaSearchThatPlaysGetsAMediaCard() {
+        val played = "Playing “Lofi” in YouTube (com.google.android.youtube), the top result for “lofi”."
+        val t = turn(call(1, "media action=play query=lofi", played))
+        assertEquals("com.google.android.youtube", (ResultCards.of(t).single() as ResultCard.Media).pkg)
+        assertTrue(ResultCards.of(turn(call(1, "media action=play query=lofi", "Nothing started playing from the search."))).isEmpty())
+        assertEquals(ResultCards.CARD_HINT, ResultCards.cardHint("media", mapOf("action" to "play", "query" to "lofi"), played))
+    }
+
     @Test fun noMediaCardWhenTheTurnMovedOn() {
         val t = turn(call(1, "open package=com.google.android.youtube", youtube), call(2, "open package=com.android.settings", screen("com.android.settings", "[1] TextView 'Wi-Fi' @1,1")))
         assertTrue(ResultCards.of(t).none { it is ResultCard.Media })

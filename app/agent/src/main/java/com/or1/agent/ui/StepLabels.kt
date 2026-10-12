@@ -47,7 +47,7 @@ object StepLabels {
                 else -> "Checked the next alarm"
             }
             "media" -> when (action) {
-                "play" -> "Play"
+                "play" -> args.optString("query").ifBlank { null }?.let { "Play “${it.take(40)}”" } ?: "Play"
                 "pause" -> "Pause"
                 "next" -> "Skip to the next"
                 "previous" -> "Back to the previous"
