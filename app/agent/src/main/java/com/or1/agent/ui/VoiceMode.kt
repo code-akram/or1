@@ -62,7 +62,7 @@ import com.or1.agent.AgentHub
 import com.or1.agent.ChatItem
 import com.or1.agent.ListenState
 import com.or1.agent.MediaApps
-import com.or1.agent.MediaKeeper
+import com.or1.agent.Stage
 import com.or1.agent.NowState
 import com.or1.agent.Sentences
 import com.or1.agent.SpeechInput
@@ -585,11 +585,11 @@ private const val BARGE_AFTER_MS = 600L
  * Speaks [text] to the end, a tap, or a barge-in (returned). Without a TTS engine, shows it for a while instead. While
  * speaking it listens ([bargeIn]); when it ends without one, the listening is dropped.
  */
-/** Media plays on the work display: kept after a turn, or the app in front there playing (MediaKeeper may not have decided yet). */
+/** Media plays on the work display: kept after a turn, or the app in front there playing (Stage may not have decided yet). */
 private suspend fun workMediaPlaying(): Boolean {
-    // MediaKeeper gives a just-tapped player a few seconds to start; so does this.
+    // Stage gives a just-tapped player a few seconds to start; so does this.
     repeat(8) {
-        if (MediaKeeper.kept.value != null) return true
+        if (Stage.kept.value != null) return true
         val front = HiddenDisplay.foregroundPackage.value
         if (front != null && NowState.media.value.any { it.pkg == front && it.playing }) return true
         if (front == null || front !in MediaApps.KNOWN && front !in MediaApps.seen) return false

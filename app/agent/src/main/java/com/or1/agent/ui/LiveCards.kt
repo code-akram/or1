@@ -92,7 +92,8 @@ private object MediaFrames {
 }
 
 /**
- * A 16:9 crop of the work display while the turn's media app is in front there: plain image swaps of the preview
+ * A 16:9 crop of the work display while the turn's media app is in front there, or of the stage while it plays there
+ * after its turn ([com.or1.agent.Stage]): plain image swaps of the preview
  * (500 ms, 400 ms while this card follows it), no SurfaceView (the viewer keeps the only one). Paused: a play badge;
  * playing: steady `live` blocks on an ink0 60% mat (so they show on bright frames). Frozen (an older card, another app
  * in front, or the media stopped): the last frame under an ink0 40% veil. The whole card opens the viewer, which is the
@@ -104,26 +105,30 @@ internal fun MediaCard(card: ResultCard.Media, live: Boolean) {
     val open = LocalCardActions.current.openViewer
     val app = remember(card.pkg) { appLabel(context, card.pkg) }
     val front by HiddenDisplay.foregroundPackage.collectAsState()
+    val kept by com.or1.agent.Stage.kept.collectAsState()
     val sessions by NowState.media.collectAsState()
     val session = sessions.firstOrNull { it.pkg == card.pkg }
-    val following = live && front == card.pkg && session?.stopped != true
+    // In front of the work display, or playing on the stage after its turn.
+    val staged = kept == card.pkg
+    val following = live && (front == card.pkg || staged) && session?.stopped != true
     val playing = following && session?.playing == true
     var frame by remember(card.key) { mutableStateOf(MediaFrames.get(card.key)) }
     var onScreen by remember { mutableStateOf(false) }
     if (following && onScreen) {
         val lifecycle = LocalLifecycleOwner.current.lifecycle
-        LaunchedEffect(card.key, lifecycle) {
+        LaunchedEffect(card.key, lifecycle, staged) {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                HiddenDisplay.fastPreview(true)
+                val fast: (Boolean) -> Unit = if (staged) com.or1.agent.Stage::follow else HiddenDisplay::fastPreview
+                fast(true)
                 try {
-                    HiddenDisplay.preview.filterNotNull().collectLatest { bitmap ->
+                    (if (staged) com.or1.agent.Stage.preview else HiddenDisplay.preview).filterNotNull().collectLatest { bitmap ->
                         val cropped = withContext(Dispatchers.Default) { cropFrame(bitmap, card.pkg) }
                         val title = NowState.media.value.firstOrNull { it.pkg == card.pkg }?.title ?: frame?.second
                         MediaFrames.put(card.key, cropped, title)
                         frame = cropped to title
                     }
                 } finally {
-                    HiddenDisplay.fastPreview(false)
+                    fast(false)
                 }
             }
         }

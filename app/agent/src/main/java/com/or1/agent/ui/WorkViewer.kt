@@ -168,6 +168,8 @@ private class WorkSurface(context: Context) : SurfaceView(context), SurfaceHolde
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         thread {
+            // The viewer is the player: media playing on the stage comes back to the work screen while it's open.
+            if (!AgentHub.busy.value && !AgentHub.routineBusy.value) com.or1.agent.Stage.recall()
             HiddenDisplay.ensure() ?: return@thread
             post { if (holder.surface.isValid) HiddenDisplay.attachViewer(holder.surface) }
             HiddenDisplay.showHomeIfEmpty()
@@ -178,7 +180,7 @@ private class WorkSurface(context: Context) : SurfaceView(context), SurfaceHolde
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         HiddenDisplay.detachViewer()
-        if (!AgentHub.busy.value) com.or1.agent.MediaKeeper.park()
+        com.or1.agent.Stage.park()
     }
 
     @SuppressLint("ClickableViewAccessibility")

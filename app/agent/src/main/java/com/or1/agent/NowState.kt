@@ -132,7 +132,7 @@ sealed interface NowChip {
 
     data class Timer(val timer: NowTimer) : NowChip { override val key get() = "timer:${timer.id}" }
     data class RoutineRun(val label: String) : NowChip { override val key get() = "routine" }
-    /** Media kept playing on the work display after its turn ([MediaKeeper]). */
+    /** Media kept playing on the stage after its turn ([Stage]). */
     data class Media(val media: MediaNow) : NowChip { override val key get() = "media" }
     data class Alarm(val alarm: NextAlarm) : NowChip { override val key get() = "alarm" }
     data class Event(val event: NextEvent) : NowChip { override val key get() = "event:${event.eventId}" }
@@ -215,7 +215,7 @@ object NowState {
             }
         }
         scope.launch { AgentHub.runningRoutine.collect { refreshChips() } }
-        scope.launch { MediaKeeper.kept.collect { refreshChips() } }
+        scope.launch { Stage.kept.collect { refreshChips() } }
         scope.launch {
             while (true) {
                 refreshEvent()
@@ -275,7 +275,7 @@ object NowState {
         val time = Instant.ofEpochMilli(next.at).atZone(ZoneId.systemDefault())
         scope.launch(Dispatchers.IO) {
             runCatching { SystemTools(context).dismissAlarm(time.hour, time.minute, next.label) }.onFailure { Log.w(TAG, "alarm off failed", it) }
-            if (!AgentHub.busy.value && !AgentHub.routineBusy.value) MediaKeeper.park()
+            if (!AgentHub.busy.value && !AgentHub.routineBusy.value) Stage.park()
             refreshAlarm()
         }
         return true
@@ -438,8 +438,32 @@ object NowState {
         _chips.value = NowLogic.chips(
             _timers.value, AgentHub.runningRoutine.value, _alarm.value, _event.value,
             groups.sumOf { it.items.size }, groups.size, System.currentTimeMillis(),
-            MediaKeeper.kept.value?.let { pkg -> _media.value.firstOrNull { it.pkg == pkg } ?: MediaNow(pkg, null, null, PlaybackState.STATE_NONE) },
+            Stage.kept.value?.let { pkg -> _media.value.firstOrNull { it.pkg == pkg } ?: MediaNow(pkg, null, null, PlaybackState.STATE_NONE) },
         )
+    }
+
+    /**
+     * [action] (play, pause, next, previous) on [pkg]'s media session (the `media` tool). False without one. Waits for
+     * the call to be handed to the session (on the main thread).
+     */
+    fun transport(pkg: String, action: String): Boolean {
+        val controller = controllers.firstOrNull { it.first.packageName == pkg }?.first ?: return false
+        val done = java.util.concurrent.CountDownLatch(1)
+        main.post {
+            runCatching {
+                val t = controller.transportControls
+                when (action) {
+                    "play" -> t.play()
+                    "pause" -> t.pause()
+                    "next" -> t.skipToNext()
+                    "previous" -> t.skipToPrevious()
+                    else -> throw IllegalArgumentException("Unknown media action '$action'.")
+                }
+            }.onFailure { Log.w(TAG, "media $action", it) }
+            done.countDown()
+        }
+        done.await(2, java.util.concurrent.TimeUnit.SECONDS)
+        return true
     }
 
     /** Pause or play the media session of [pkg] (the Now strip's media chip). False without one. */

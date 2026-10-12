@@ -17,6 +17,7 @@ class Tools(context: Context) {
     private val memory = MemoryTool(context)
     internal val calendar = CalendarTool(context)
     internal val contacts = ContactsTool(context)
+    private val media = MediaTool(context)
 
     fun elementLabel(id: Int): String = screen.labelOf(id)
 
@@ -45,6 +46,7 @@ class Tools(context: Context) {
         "calendar" -> calendar.run(args)
         "contacts" -> contacts.run(args)
         "routines" -> com.or1.agent.Routines.tool(args)
+        "media" -> media.run(args)
         else -> throw IllegalArgumentException("Unknown tool '$name'.")
     }
 }

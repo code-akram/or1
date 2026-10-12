@@ -55,12 +55,38 @@ tools.append({
     },
 })
 
+# Media keeps playing on the phone's stage display after a turn; the phone controls it through media sessions.
+tools.append({
+    "name": "media",
+    "description": (
+        "Songs and videos through the apps' media sessions, without their screens. status: what each media app is "
+        "playing (title, playing or paused, and whether it's on its own screen). play, pause, next, previous: control "
+        "the media that's playing (or `package`). Check the result: some apps (YouTube outside a playlist) ignore next "
+        "and previous; then open the app."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["status", "play", "pause", "next", "previous"]},
+            "package": {"type": "string"},
+        },
+        "required": ["action"],
+        "additionalProperties": False,
+    },
+})
+
 # On the phone, apps the agent opens run on a hidden work display so the chat stays in front.
 PHONE_NOTES = """
 Work screen: apps you open run on a hidden work screen of the same size (720x1600), so the user stays in the chat \
 while you work; screen, act and open all use it, and the user sees a live thumbnail and can watch or take over. \
 In shell, target it with `am start --display $OR1_DISPLAY ...` and `input -d $OR1_DISPLAY ...`. On the work screen, \
 key home shows an empty screen and recents is not available.
+
+Media: a song or video the user asks for keeps playing after your turn on its own screen (the screen tool notes it), \
+so your work screen is free and other requests (a timer, a message) don't interrupt it; the user hears it. Control \
+it with the media tool (status, pause, play, next); open the app only when you need its screen (to search or pick \
+something else), which brings it back to your work screen. To stop a ringing or running timer use clock stop_timer, \
+not the Clock app.
 
 Routine runs: a message starting with [Routine ...] was started by a routine, not typed by the user just now. Do what \
 its request says and reply in one or two self-contained sentences.

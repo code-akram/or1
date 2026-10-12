@@ -75,7 +75,9 @@ class ScreenTools(private val context: Context) {
         val text = read()
         // Canvas-drawn UIs expose no elements; show the agent a picture instead.
         val needImage = withScreenshot || elements.isEmpty() && !text.contains(OWN_UI) && text != EMPTY_WORK_SCREEN
-        return ToolOutput(text, if (needImage) screenshot() else null)
+        // Media the user asked for plays on its own screen (the stage), not this one.
+        val stage = com.or1.agent.Stage.kept.value?.let { "\n(Playing on its own screen, not this one: $it. Control it with the media tool; open it only to use its screen.)" }
+        return ToolOutput(text + stage.orEmpty(), if (needImage) screenshot() else null)
     }
 
     private fun read(): String {

@@ -171,6 +171,7 @@ object AgentHub {
         if (::appContext.isInitialized) return
         appContext = context.applicationContext
         HiddenDisplay.init(appContext)
+        Stage.init(appContext)
         HiddenDisplay.onLeakMoved = { returnToComposer() }
         ActivityLog.init(appContext.filesDir)
         ActivityLog.onChange = ::effectChanged
@@ -285,7 +286,7 @@ object AgentHub {
                     ok = !outcome.failed && !outcome.stopped
                     requestId?.let { recordReply(it, outcome.reply, outcome.cost, outcome.requests, outcome.seconds) }
                     returnToComposer()
-                    MediaKeeper.park()
+                    Stage.park()
                 }
             } finally {
                 done?.invoke(!ok)
@@ -350,7 +351,7 @@ object AgentHub {
                     _runningRoutine.value = null
                     // Hand focus back to the real screen without pulling the chat in front of anything.
                     HiddenDisplay.restoreFocus()
-                    MediaKeeper.park()
+                    Stage.park()
                     if (wake.isHeld) wake.release()
                 }
             }
@@ -396,6 +397,8 @@ object AgentHub {
     /** One request through [a]; the caller holds [lock] and has added the user item. */
     private suspend fun run(text: String, a: Agent, busy: MutableStateFlow<Boolean>, spoken: Boolean = false): Outcome {
         framesThisAct = 0
+        // A song or video from the last request moves to the stage first, so this one can't cover (and stop) it.
+        Stage.beforeRequest()
         busy.value = true
         val started = System.currentTimeMillis()
         var cost = 0.0
@@ -576,7 +579,7 @@ object AgentHub {
                 ActivityLog.update(effectId, UndoState.PENDING)
                 scope.launch(Dispatchers.IO) {
                     // The Clock app shows its timer notification (which the timer undo uses) only while it's not in front.
-                    if (spec.optString("op") == "timer" && !_busy.value && !_routineBusy.value) MediaKeeper.park()
+                    if (spec.optString("op") == "timer" && !_busy.value && !_routineBusy.value) Stage.park()
                     val result = runCatching { Undo.local(tools, spec) }
                     result.onFailure { Log.w(TAG, "undo $effectId failed", it) }
                     ActivityLog.update(
@@ -584,7 +587,7 @@ object AgentHub {
                         result.getOrNull() ?: result.exceptionOrNull()?.let { it.message ?: it.javaClass.simpleName },
                     )
                     // The alarm undo goes through the work display; put it away unless a request is using it.
-                    if (spec.optString("op") == "alarm" && !_busy.value && !_routineBusy.value) MediaKeeper.park()
+                    if (spec.optString("op") == "alarm" && !_busy.value && !_routineBusy.value) Stage.park()
                 }
             }
             UndoTier.AGENT -> {

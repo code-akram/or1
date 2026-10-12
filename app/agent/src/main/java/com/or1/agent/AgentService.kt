@@ -347,8 +347,8 @@ private fun displayCommand(context: Context, command: String, intent: Intent) {
                 "back" -> "injected=${HiddenDisplay.injectKey(android.view.KeyEvent.KEYCODE_BACK, HiddenDisplay.ensure()!!)}"
                 "home" -> { HiddenDisplay.goHome(); "home" }
                 "park" -> { HiddenDisplay.park(); "parked" }
-                // What a request's end does: park, unless media plays in front (MediaKeeper).
-                "keep" -> { MediaKeeper.park(); "keep: front=${HiddenDisplay.id?.let { HiddenDisplay.topAppPackage(it) }} media=${NowState.media.value}" }
+                // What a request's end does: park, unless media plays in front (Stage).
+                "keep" -> { Stage.park(); "keep: front=${HiddenDisplay.id?.let { HiddenDisplay.topAppPackage(it) }} media=${NowState.media.value}" }
                 "restore" -> { HiddenDisplay.restoreFocus(); "restored" }
                 "focus" -> "focused=${HiddenDisplay.focus()}"
                 "tool" -> debugTools(context).run(intent.getStringExtra("name")!!, org.json.JSONObject(intent.getStringExtra("args") ?: "{}")).text

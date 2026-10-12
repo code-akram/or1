@@ -43,7 +43,15 @@ object StepLabels {
                     (args.optString("label").takeIf { it.isNotBlank() }?.let { " “$it”" } ?: "")
                 "set_timer" -> "Set a ${duration(args.optInt("seconds"))} timer"
                 "dismiss_alarm" -> args.optString("label").takeIf { it.isNotBlank() }?.let { "Turn off the “$it” alarm" } ?: "Turn off all alarms"
+                "stop_timer" -> "Stop the timer"
                 else -> "Checked the next alarm"
+            }
+            "media" -> when (action) {
+                "play" -> "Play"
+                "pause" -> "Pause"
+                "next" -> "Skip to the next"
+                "previous" -> "Back to the previous"
+                else -> "Checked what's playing"
             }
             "calendar" -> when (action) {
                 "add" -> "Add “${args.optString("title").take(40)}” to the calendar on ${args.optString("start").replace('T', ' ')}"

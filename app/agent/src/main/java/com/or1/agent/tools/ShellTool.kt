@@ -26,6 +26,8 @@ class ShellTool {
             else -> "the agent app's uid (no root available)"
         }
         // The agent's hidden work display, for `am start --display` and `input -d`.
+        // A launch of the app playing on the stage would bring it to the front there, not here: bring it back first.
+        com.or1.agent.Stage.recallFor(command)
         val script = "export OR1_DISPLAY=${HiddenDisplay.ensure() ?: 0}; $command"
         // Arm the leak guard: an `am start` without --display opens on the real screen and gets moved over.
         HiddenDisplay.markActivity()

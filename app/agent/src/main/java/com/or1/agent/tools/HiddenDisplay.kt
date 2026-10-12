@@ -30,30 +30,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * An off-screen display the agent works on, so apps it opens never cover the chat. Same size and density as the
- * panel, so coordinates and layouts match and moving a task to the real screen doesn't relaunch it.
- *
- * Flags (AOSP 13): PUBLIC, because accessibility ignores private virtual displays; OWN_CONTENT_ONLY, so it never
- * mirrors the phone screen; TRUSTED, so activities the hidden app starts (choosers, permission prompts) stay here and
- * the IME can be hidden; DESTROY_CONTENT_ON_REMOVAL, so a crash can't drop hidden apps on top of the chat.
- * The hidden ones need signature permissions, which the platform key grants. Hidden APIs are reached by reflection;
- * platform-signed apps are exempt from the hidden-API blocklist.
+ * The off-screen display the agent works on (a [VirtualScreen]), so apps it opens never cover the chat: waking and
+ * parking it, which display tools act on, focus (handing it back to the chat), the leak guard, launching apps there,
+ * tasks and input. Hidden APIs are reached by reflection; platform-signed apps are exempt from the hidden-API blocklist.
  */
 object HiddenDisplay {
     private const val TAG = "or1-display"
-    private const val NAME = "or1-work"
-    private const val PREVIEW_WIDTH = 360
-    private const val PREVIEW_INTERVAL_MS = 500L
-
-    private const val FLAG_PUBLIC = 1
-    private const val FLAG_SECURE = 4
-    private const val FLAG_OWN_CONTENT_ONLY = 8
-    private const val FLAG_SUPPORTS_TOUCH = 64
-    private const val FLAG_DESTROY_CONTENT_ON_REMOVAL = 256
-    private const val FLAG_TRUSTED = 1024
-    private const val FLAG_OWN_DISPLAY_GROUP = 2048
-    private const val FLAG_ALWAYS_UNLOCKED = 4096
-    private const val FLAG_TOUCH_FEEDBACK_DISABLED = 8192
 
     /** MotionEvent.FLAG_NO_FOCUS_CHANGE (hidden). */
     private const val FLAG_NO_FOCUS_CHANGE = 0x40
@@ -66,10 +48,8 @@ object HiddenDisplay {
     const val IME_FALLBACK = 1
 
     private lateinit var context: Context
-    private var display: VirtualDisplay? = null
-    private var reader: ImageReader? = null
-    private val thread by lazy { HandlerThread("or1-display").apply { start() } }
-    private val handler by lazy { Handler(thread.looper) }
+    private val work = VirtualScreen("or1-work")
+    private val handler get() = work.handler
 
     /** Set when creation failed: the agent works on the real screen for the rest of this process. */
     @Volatile
@@ -83,9 +63,8 @@ object HiddenDisplay {
     @Volatile
     private var currentPackage: String? = null
 
-    private val _preview = MutableStateFlow<Bitmap?>(null)
-    /** Downscaled frames of the hidden display, at most every PREVIEW_INTERVAL_MS. */
-    val preview: StateFlow<Bitmap?> = _preview
+    /** Downscaled frames of the work display, at most every 500 ms. */
+    val preview: StateFlow<Bitmap?> get() = work.preview
 
     private val _inUse = MutableStateFlow(false)
     /**
@@ -102,37 +81,19 @@ object HiddenDisplay {
     /** The package behind [foregroundApp] (the live media card follows its app's frames only while it's in front). */
     val foregroundPackage: StateFlow<String?> = _foregroundPackage
 
-    /**
-     * How often [preview] converts a frame: PREVIEW_INTERVAL_MS, or [FAST_PREVIEW_MS] while the live media card asks
-     * for it ([fastPreview]) because a media app is in front.
-     */
-    @Volatile
-    private var previewInterval = PREVIEW_INTERVAL_MS
-    const val FAST_PREVIEW_MS = 400L
+    const val FAST_PREVIEW_MS = VirtualScreen.FAST_PREVIEW_MS
 
     /** Converts frames every [FAST_PREVIEW_MS] instead of every 500 ms; the live media card sets it while it shows playback. */
-    fun fastPreview(fast: Boolean) {
-        previewInterval = if (fast) FAST_PREVIEW_MS else PREVIEW_INTERVAL_MS
-    }
+    fun fastPreview(fast: Boolean) = work.fastPreview(fast)
 
-    /** The display's size in pixels (the panel's), for [TapMark]s. */
-    @Volatile
-    private var size = android.graphics.Point(0, 0)
-
-    @Volatile
-    private var held: android.media.Image? = null
-    @Volatile
-    private var dirty = false
-    private var lastConverted = 0L
-    private var viewerAttached = false
-    private var parked = false
+    private val viewerAttached get() = work.viewerAttached
 
     fun init(context: Context) {
         this.context = context.applicationContext
         HiddenAudio.init(this.context)
     }
 
-    val id: Int? get() = display?.display?.displayId
+    val id: Int? get() = work.id
 
     /** The display tools should act on: the hidden one, unless it's unavailable or the current app refused it. */
     fun targetDisplay(): Int {
@@ -143,10 +104,15 @@ object HiddenDisplay {
     /** Creates the display if needed. Returns its id, or null if the agent should use the real screen. */
     @Synchronized
     fun ensure(): Int? {
-        id?.let { unpark(); holdAwake(it); _inUse.value = true; return it }
+        id?.let { unpark(); work.holdAwake(); _inUse.value = true; return it }
         if (unavailable) return null
         return try {
-            create().also { holdAwake(it); _inUse.value = true }
+            releaseStaleDisplays()
+            work.create(context) { reset() }.also {
+                setImePolicy(IME_FALLBACK)
+                work.holdAwake()
+                _inUse.value = true
+            }
         } catch (e: Exception) {
             Log.e(TAG, "could not create the hidden display; using the real screen", e)
             unavailable = true
@@ -154,47 +120,9 @@ object HiddenDisplay {
         }
     }
 
-    private fun create(): Int {
-        releaseStaleDisplays()
-        val metrics = context.getSystemService(DisplayManager::class.java).getDisplay(Display.DEFAULT_DISPLAY)
-        val size = android.graphics.Point().also { @Suppress("DEPRECATION") metrics.getRealSize(it) }
-        this.size = size
-        val dpi = context.resources.displayMetrics.densityDpi
-        val imageReader = ImageReader.newInstance(size.x, size.y, PixelFormat.RGBA_8888, 3)
-        imageReader.setOnImageAvailableListener({ onFrame(it) }, handler)
-        // SECURE (CAPTURE_SECURE_VIDEO_OUTPUT): FLAG_SECURE windows render here too, instead of black in the thumbnail,
-        // viewer and screenshots.
-        val flags = FLAG_PUBLIC or FLAG_SECURE or FLAG_OWN_CONTENT_ONLY or FLAG_TRUSTED or FLAG_SUPPORTS_TOUCH or
-            FLAG_DESTROY_CONTENT_ON_REMOVAL or FLAG_TOUCH_FEEDBACK_DISABLED or FLAG_OWN_DISPLAY_GROUP or FLAG_ALWAYS_UNLOCKED
-        val created = context.getSystemService(DisplayManager::class.java).createVirtualDisplay(
-            NAME, size.x, size.y, dpi, imageReader.surface, flags,
-            object : VirtualDisplay.Callback() {
-                override fun onStopped() {
-                    Log.w(TAG, "hidden display stopped")
-                    reset()
-                }
-            },
-            handler,
-        ) ?: error("createVirtualDisplay returned null")
-        reader = imageReader
-        display = created
-        val newId = created.display.displayId
-        setImePolicy(IME_FALLBACK)
-        Log.i(TAG, "hidden display $newId created (${size.x}x${size.y} @ $dpi dpi)")
-        return newId
-    }
-
     @Synchronized
     private fun reset() {
-        display?.release()
-        display = null
-        parked = false
-        wakeLock?.takeIf { it.isHeld }?.release()
-        held?.close()
-        held = null
-        reader?.close()
-        reader = null
-        _preview.value = null
+        work.release()
         _inUse.value = false
         _foregroundApp.value = null
         _foregroundPackage.value = null
@@ -212,72 +140,22 @@ object HiddenDisplay {
         }
     }
 
-    /** Turns the display off between requests: its apps stop (AOSP puts an off display to sleep) until [unpark]. */
+    /**
+     * Turns the display off between requests: its apps stop (AOSP puts an off display to sleep) until [unpark]. Media
+     * the user asked for has moved to the stage by then ([com.or1.agent.Stage]), so it keeps playing.
+     */
     @Synchronized
     fun park() {
         // The request is over either way; with the viewer open the user has the display.
         _inUse.value = false
-        if (viewerAttached || display == null) return
-        display?.surface = null
-        parked = true
-        wakeLock?.takeIf { it.isHeld }?.release()
+        if (viewerAttached || id == null) return
+        work.park()
         HiddenAudio.park()
-    }
-
-    /** [park] unless a request is using the display (it parks it when it ends). */
-    @Synchronized
-    fun parkIfIdle() {
-        if (!_inUse.value) park()
-    }
-
-    /**
-     * The request is over but the display keeps running (MediaKeeper: the app in front plays media): the app is heard,
-     * the screen wake lock stays ([keepAwake] extends it).
-     */
-    @Synchronized
-    fun release() {
-        _inUse.value = false
-        if (display == null || parked) return
-        HiddenAudio.unmuteAll()
-        keepAwake()
-    }
-
-    /** Extends the display's screen wake lock (10 minutes from now) while it's awake. */
-    @Synchronized
-    fun keepAwake() {
-        if (display == null || parked) return
-        val lock = wakeLock
-        if (lock == null) id?.let(::holdAwake) else lock.acquire(10 * 60_000L)
-    }
-
-    private var wakeLock: android.os.PowerManager.WakeLock? = null
-
-    /**
-     * The display has its own power group (so it works while the phone is off or locked), and that group sleeps after
-     * the screen timeout like the phone does. A screen wake lock bound to this display (hidden newWakeLock overload,
-     * Android 13) keeps only this group awake while the agent works; [park] releases it.
-     */
-    private fun holdAwake(displayId: Int) {
-        if (wakeLock?.isHeld == true) return
-        val pm = context.getSystemService(android.os.PowerManager::class.java)
-        @Suppress("DEPRECATION")
-        val flags = android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP
-        wakeLock = try {
-            pm.javaClass.getMethod("newWakeLock", Int::class.javaPrimitiveType, String::class.java, Int::class.javaPrimitiveType)
-                .invoke(pm, flags, "or1:work-display", displayId) as android.os.PowerManager.WakeLock
-        } catch (e: Exception) {
-            Log.w(TAG, "no per-display wake lock; the work display may sleep during long tasks", e)
-            null
-        }
-        wakeLock?.setReferenceCounted(false)
-        wakeLock?.acquire(10 * 60_000L)
     }
 
     @Synchronized
     private fun unpark() {
-        if (!parked) return
-        parked = false
-        reader?.surface?.let { display?.surface = it }
+        if (!work.unpark()) return
         // Give the apps a moment to resume and redraw before tools read the screen.
         Thread.sleep(400)
         id?.let { HiddenAudio.mute(topAppPackage(it)) }
@@ -299,6 +177,12 @@ object HiddenDisplay {
      * screen. Right after an agent action, move any such app over to the hidden display and put the chat back.
      */
     fun onWindowsChanged(displayId: Int) {
+        if (displayId != Display.DEFAULT_DISPLAY && displayId == com.or1.agent.Stage.id) {
+            // The app on the stage opened a screen, which moved the stage on top with focus: hand it back too.
+            handler.removeCallbacks(restoreFocusRunnable)
+            handler.post(restoreFocusRunnable)
+            return
+        }
         if (displayId != Display.DEFAULT_DISPLAY && displayId == id) refreshForegroundApp()
         if (displayId != Display.DEFAULT_DISPLAY && displayId == id && !deliveringKey) {
             // Whatever runs here stays quiet unless the user is watching (launches by open, clock and shell all land
@@ -379,58 +263,18 @@ object HiddenDisplay {
 
     private val SYSTEM_SURFACES = setOf("com.android.systemui", "com.android.launcher3", "com.android.permissioncontroller")
 
-    // --- Frames -------------------------------------------------------------------------------------------------
-
-    /** Always drain the reader so the display never stalls; keep the newest image and convert it at most twice a second. */
-    private fun onFrame(r: ImageReader) {
-        val image = try { r.acquireLatestImage() } catch (e: IllegalStateException) { null } ?: return
-        held?.close()
-        held = image
-        dirty = true
-        val wait = previewInterval - (SystemClock.uptimeMillis() - lastConverted)
-        if (wait <= 0) convert() else if (!handler.hasCallbacks(convertRunnable)) handler.postDelayed(convertRunnable, wait)
-    }
-
-    private val convertRunnable = Runnable { convert() }
-
-    private fun convert() {
-        val image = held ?: return
-        if (!dirty) return
-        dirty = false
-        lastConverted = SystemClock.uptimeMillis()
-        try {
-            val plane = image.planes[0]
-            val rowPixels = plane.rowStride / plane.pixelStride
-            val full = Bitmap.createBitmap(rowPixels, image.height, Bitmap.Config.ARGB_8888)
-            full.copyPixelsFromBuffer(plane.buffer.rewind())
-            val cropped = if (rowPixels == image.width) full else Bitmap.createBitmap(full, 0, 0, image.width, image.height)
-            val scale = PREVIEW_WIDTH.toFloat() / image.width
-            _preview.value = Bitmap.createScaledBitmap(cropped, PREVIEW_WIDTH, (image.height * scale).toInt(), true)
-        } catch (e: Exception) {
-            Log.w(TAG, "frame conversion failed", e)
-        }
-    }
+    // --- Frames and viewer -------------------------------------------------------------------------------------------
 
     /**
-     * The newest frame of the display, downscaled like [preview]: converts the newest image now (on the display thread,
-     * waiting at most [maxWaitMs]) if the preview is behind it, else returns the preview as it is. For evidence frames
-     * taken just before a committing tap, which mustn't hold the tap up.
+     * The newest frame of the display, downscaled like [preview]: for evidence frames taken just before a committing
+     * tap, which mustn't hold the tap up.
      */
-    fun latestFrame(maxWaitMs: Long = 40): Bitmap? {
-        if (held != null && dirty && android.os.Looper.myLooper() != thread.looper) {
-            val done = CountDownLatch(1)
-            handler.postAtFrontOfQueue { convert(); done.countDown() }
-            done.await(maxWaitMs, TimeUnit.MILLISECONDS)
-        }
-        return _preview.value
-    }
+    fun latestFrame(maxWaitMs: Long = 40): Bitmap? = work.latestFrame(maxWaitMs)
 
     /** The full-screen viewer renders straight from the display; the reader takes over again when it closes. */
     @Synchronized
     fun attachViewer(surface: Surface) {
-        display?.surface = surface
-        viewerAttached = true
-        parked = false
+        work.attachViewer(surface)
         setImePolicy(IME_LOCAL)
         // The user is watching: let the app be heard.
         id?.let { HiddenAudio.unmute(topAppPackage(it)) }
@@ -438,8 +282,7 @@ object HiddenDisplay {
 
     @Synchronized
     fun detachViewer() {
-        viewerAttached = false
-        reader?.surface?.let { display?.surface = it }
+        work.detachViewer()
         setImePolicy(IME_FALLBACK)
         id?.let { HiddenAudio.mute(topAppPackage(it)) }
         // Touching the work screen moved focus (and its display) to the top; give the chat its keyboard back.
@@ -470,6 +313,8 @@ object HiddenDisplay {
     suspend fun launch(intent: Intent, expectPackage: String?): Int {
         markActivity()
         val target = ensure()
+        // A task on the stage would come to the front there: move it back first.
+        (expectPackage ?: intent.data?.toString()?.let { com.or1.agent.Stage.resolve(it) })?.let { com.or1.agent.Stage.recall(it) }
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         if (target == null || expectPackage != null && expectPackage in refused) {
             currentPackage = expectPackage
@@ -675,7 +520,7 @@ object HiddenDisplay {
         if (displayId == id) {
             // Where the stroke starts, for the ember ring over the work display's thumbnail.
             val kind = if (x1 != x2 || y1 != y2) "swipe" else if (durationMs >= 300) "long_press" else "tap"
-            Evidence.tap(TapMark(x1, y1, size.x, size.y, SystemClock.elapsedRealtime(), kind))
+            Evidence.tap(TapMark(x1, y1, work.size.x, work.size.y, SystemClock.elapsedRealtime(), kind))
         }
         val down = SystemClock.uptimeMillis()
         val pointer = arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_FINGER })
