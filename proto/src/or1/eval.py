@@ -33,7 +33,7 @@ def run_on_phone(task: str, request_id: str) -> dict:
     deadline = time.time() + PHONE_TIMEOUT
     while time.time() < deadline:
         time.sleep(3)
-        for line in adb.shell(f"run-as {PHONE_PKG} cat files/replies.jsonl 2>/dev/null").splitlines():
+        for line in adb.shell(f"run-as {PHONE_PKG} cat files/replies.jsonl 2>/dev/null || true").splitlines():
             if f'"id":"{request_id}"' in line:
                 return json.loads(line)
     return {"reply": "[timed out waiting for the phone agent]", "cost": 0, "requests": 0, "seconds": PHONE_TIMEOUT}
