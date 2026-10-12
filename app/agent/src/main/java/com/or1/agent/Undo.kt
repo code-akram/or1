@@ -23,6 +23,7 @@ object Undo {
         "timer" -> tools.system.cancelTimer(spec.label())
         "calendar_delete" -> tools.calendar.deleteEvent(spec.getLong("event_id"))
         "calendar_restore" -> tools.calendar.restoreEvent(spec)
+        "calendar_move" -> tools.calendar.moveBack(spec)
         "contact_delete" -> tools.contacts.deleteRawContact(spec.getLong("raw_contact_id"))
         "routine_remove" -> Routines.remove(spec.getString("id"))?.let { "Removed routine “${it.title}”." }
             ?: error("The routine was already removed.")

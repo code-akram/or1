@@ -38,7 +38,7 @@ enum class UndoState {
 data class Effect(
     val id: String,
     val time: Long,
-    /** chat, routine or eval (debug-driver requests, kept out of [AgentHub.effects]). */
+    /** chat, routine, card (the user, on a card: [AgentHub.cardChange]) or eval (debug-driver requests, kept out of [AgentHub.effects]). */
     val source: String,
     /** The chat's transcript name, or the routine's id. */
     val sourceId: String?,
@@ -172,6 +172,7 @@ object Effects {
                 action == "add" -> Classified("Added “${clip(title ?: args.optString("title"))}” to the calendar" +
                     args.optString("start").takeIf { it.isNotBlank() }?.let { ", ${it.replace('T', ' ')}" }.orEmpty(), UndoTier.LOCAL, undo)
                 action == "delete" -> Classified("Deleted “${clip(title ?: "event ${args.optLong("event_id")}")}” from the calendar", UndoTier.LOCAL, undo)
+                action == "move" -> Classified("Moved “${clip(title ?: "event ${args.optLong("event_id")}")}” to ${undo.optString("to")}", UndoTier.LOCAL, undo)
                 else -> null
             }
             "contacts" -> if (action == "add" && undo != null) Classified("Added contact ${clip(args.optString("name"))}", UndoTier.LOCAL, undo) else null

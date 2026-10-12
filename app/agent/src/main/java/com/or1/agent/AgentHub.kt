@@ -598,6 +598,23 @@ object AgentHub {
         return true
     }
 
+    /**
+     * A change the user makes on a card (no API call): runs [tool] here and records its effect like the agent's call
+     * (same label and undo), with source "card" ("You" on Today). Returns the effect, or null if the call changed
+     * nothing undoable; throws with a readable message when the tool fails.
+     */
+    suspend fun cardChange(tool: String, args: JSONObject): Effect? = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        val output = tools.run(tool, args)
+        val now = java.time.ZonedDateTime.now()
+        val classified = Effects.classify(tool, args, CallFacts(undo = output.undo), now) ?: return@withContext null
+        Effect(
+            id = ActivityLog.newId(), time = now.toInstant().toEpochMilli(), source = "card", sourceId = null, sourceLabel = null,
+            tool = tool, call = tools.describe(tool, args), label = classified.label, tier = classified.tier,
+            undo = classified.undo?.toString(), state = if (classified.tier == UndoTier.NONE) UndoState.NONE else UndoState.AVAILABLE,
+            expiresAt = classified.expiresAt,
+        ).also { ActivityLog.record(it) }
+    }
+
     /** Keeps the chat's receipt rows in step with the log. */
     private fun effectChanged(effect: Effect) {
         val swap = { list: List<ChatItem> -> list.map { if (it is ChatItem.Effect && it.effect.id == effect.id) it.copy(effect = effect) else it } }

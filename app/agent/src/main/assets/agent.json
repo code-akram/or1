@@ -167,7 +167,7 @@
   },
   {
    "name": "calendar",
-   "description": "Calendar events without touching the UI. list: events from `date` (YYYY-MM-DD, default today) for `days` days (default 7), with event ids. add: `title` and `start` (YYYY-MM-DDTHH:MM local time, or YYYY-MM-DD for an all-day event); optional `end` (same format) or `duration_minutes` (default 60), `location`, `notes`, `reminder_minutes` (an alert that many minutes before). delete: `event_id` from list. Use device get first to resolve relative dates like \"next Monday\".",
+   "description": "Calendar events without touching the UI. list: events from `date` (YYYY-MM-DD, default today) for `days` days (default 7), with event ids. add: `title` and `start` (YYYY-MM-DDTHH:MM local time, or YYYY-MM-DD for an all-day event); optional `end` (same format) or `duration_minutes` (default 60), `location`, `notes`, `reminder_minutes` (an alert that many minutes before). delete: `event_id` from list. move: `event_id` and the new `start` (same format as add); it keeps its length unless `end` or `duration_minutes` is given (repeating events can't be moved). Use device get first to resolve relative dates like \"next Monday\".",
    "input_schema": {
     "type": "object",
     "properties": {
@@ -176,7 +176,8 @@
       "enum": [
        "list",
        "add",
-       "delete"
+       "delete",
+       "move"
       ]
      },
      "date": {

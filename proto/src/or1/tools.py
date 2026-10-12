@@ -130,12 +130,14 @@ TOOLS = [
             "`days` days (default 7), with event ids. add: `title` and `start` (YYYY-MM-DDTHH:MM local time, or "
             "YYYY-MM-DD for an all-day event); optional `end` (same format) or `duration_minutes` (default 60), "
             "`location`, `notes`, `reminder_minutes` (an alert that many minutes before). delete: `event_id` from list. "
+            "move: `event_id` and the new `start` (same format as add); it keeps its length unless `end` or "
+            "`duration_minutes` is given (repeating events can't be moved). "
             "Use device get first to resolve relative dates like \"next Monday\"."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["list", "add", "delete"]},
+                "action": {"type": "string", "enum": ["list", "add", "delete", "move"]},
                 "date": {"type": "string"},
                 "days": {"type": "integer"},
                 "title": {"type": "string"},
@@ -477,6 +479,36 @@ def _calendar(args: dict) -> str:
             raise ValueError("delete needs `event_id` (see list).")
         adb.shell(f"content delete --uri {CAL}/events/{int(args['event_id'])}")
         return f"Deleted event {args['event_id']}."
+    if action == "move":
+        if args.get("event_id") is None or not args.get("start"):
+            raise ValueError("move needs `event_id` (see list) and the new `start`.")
+        event_id, start = int(args["event_id"]), args["start"]
+        rows = _calendar_rows(adb.shell(f"content query --uri {CAL}/events/{event_id} --projection title:dtstart:dtend:allDay:rrule"))
+        if not rows:
+            return f"No event with id {event_id}."
+        r = rows[0]
+        if r.get("rrule") not in (None, "", "NULL"):
+            raise ValueError("That's a repeating event; moving it would move every occurrence.")
+        length = int(r["dtend"]) - int(r["dtstart"]) if r.get("dtend") not in (None, "", "NULL") else 3600_000
+        if r["allDay"] == "1" or "T" not in start:
+            d = date.fromisoformat(start[:10])
+            until = date.fromisoformat(args["end"][:10]) + timedelta(days=1) if args.get("end") else None
+            b = int(datetime.combine(d, datetime.min.time(), timezone.utc).timestamp() * 1000)
+            e = int(datetime.combine(until, datetime.min.time(), timezone.utc).timestamp() * 1000) if until else b + max(length, 86400_000)
+            binds = {"allDay": "i:1", "eventTimezone": "s:UTC"}
+        else:
+            bt = datetime.fromisoformat(start).replace(tzinfo=zone)
+            b = int(bt.timestamp() * 1000)
+            if args.get("end"):
+                e = int(datetime.fromisoformat(args["end"]).replace(tzinfo=zone).timestamp() * 1000)
+            else:
+                e = b + (args["duration_minutes"] * 60_000 if args.get("duration_minutes") else length)
+            binds = {"allDay": "i:0", "eventTimezone": f"s:{zone.key}"}
+        if e <= b:
+            raise ValueError("`end` must be after `start`.")
+        binds |= {"dtstart": f"l:{b}", "dtend": f"l:{e}"}
+        adb.shell(f"content update --uri {CAL}/events/{event_id} " + " ".join(f"--bind {k}:{shlex.quote(v)}" for k, v in binds.items()))
+        return f"Moved “{r.get('title') or ''}” to {start.replace('T', ' ')} (event id {event_id})."
     raise ValueError(f"Unknown action {action!r}.")
 
 

@@ -10,6 +10,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -60,7 +61,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.or1.agent.AgentHub
+import com.or1.agent.Effect
 import com.or1.agent.NowState
+import com.or1.agent.UndoState
 import com.or1.agent.tools.CalendarEvent
 import com.or1.agent.tools.CalendarTool
 import com.or1.agent.tools.HiddenDisplay
@@ -72,6 +75,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 // The M6 live result cards (docs/ui-ledger.md §5): media, calendar day, email. Their pure side is LiveCardLogic.kt.
 
@@ -189,6 +193,9 @@ private const val MINUTE = 60_000L
  * NumeralS in a 64 dp column, all-day events first, past rows in text3, a 1 dp `live` now-line between rows moved on the
  * minute (above the first row it ends in a "now" caption). Live: re-read on every provider change. At most [CalendarDays.MAX_ROWS] rows, then "N more" (opens the
  * calendar in the viewer). Nothing found: no card.
+ *
+ * On a live card a row tap shows Move and Delete under it. Delete removes the event here (no API call; an effect with
+ * Undo, on this card and on Today); Move opens the composer with "Move “Title” (Tue 14:00) to " for the user to finish.
  */
 @Composable
 internal fun CalendarDayCard(card: ResultCard.CalendarDay, live: Boolean) {
@@ -217,6 +224,11 @@ internal fun CalendarDayCard(card: ResultCard.CalendarDay, live: Boolean) {
     val actions = LocalCardActions.current
     val scope = rememberCoroutineScope()
     val count = view.rows.size + view.more
+    // The row whose actions show (by event and start: a repeating event has several), and the last delete made here.
+    var selected by remember(card.key) { mutableStateOf<Pair<Long, Long>?>(null) }
+    var deleted by remember(card.key) { mutableStateOf<Effect?>(null) }
+    var failed by remember(card.key) { mutableStateOf<String?>(null) }
+    val effects by AgentHub.effects.collectAsState()
     CardFrame {
         CardHeader(Icons.Event, CalendarDays.title(from, days, today)) {
             Text(
@@ -237,9 +249,10 @@ internal fun CalendarDayCard(card: ResultCard.CalendarDay, live: Boolean) {
             }
             val above = view.nowLine == i
             val below = view.nowLine == view.rows.size && i == view.rows.lastIndex
+            val rowKey = row.event.id to row.event.begin
             DayRowView(
                 row,
-                Modifier.drawBehind {
+                (if (live) Modifier.clickable(onClickLabel = "Show actions") { selected = if (selected == rowKey) null else rowKey; failed = null } else Modifier).drawBehind {
                     if (above || below) {
                         val inset = 14.dp.toPx()
                         val h = 1.dp.toPx()
@@ -252,6 +265,37 @@ internal fun CalendarDayCard(card: ResultCard.CalendarDay, live: Boolean) {
                     }
                 },
             )
+            if (live && selected == rowKey) {
+                Row(Modifier.fillMaxWidth().padding(start = 64.dp + 14.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    failed?.let { Text(it, style = Type.Caption.copy(color = Palette.Error), maxLines = 2, modifier = Modifier.weight(1f)) }
+                        ?: Spacer(Modifier.weight(1f))
+                    actions.ask?.let { ask -> TextTarget("Move") { selected = null; ask(CalendarDays.moveRequest(row, zone)) } }
+                    TextTarget("Delete") {
+                        scope.launch {
+                            val result = runCatching {
+                                AgentHub.cardChange("calendar", JSONObject().put("action", "delete").put("event_id", row.event.id))
+                            }
+                            result.onSuccess { deleted = it; selected = null }
+                                .onFailure { failed = it.message ?: "Couldn't delete it." }
+                        }
+                    }
+                }
+            }
+        }
+        // The delete made here, with its Undo, until it's undone.
+        val shownDelete = deleted?.let { d -> effects.firstOrNull { it.id == d.id } ?: d }
+        if (shownDelete != null && shownDelete.state != UndoState.UNDONE) {
+            Row(
+                Modifier.hairlineTop().fillMaxWidth().heightIn(min = 48.dp).padding(start = 14.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(shownDelete.label, style = Type.Step, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                when (shownDelete.state) {
+                    UndoState.AVAILABLE -> TextTarget("Undo") { AgentHub.undo(shownDelete.id) }
+                    UndoState.PENDING -> Text("Undoing", style = Type.Caption, modifier = Modifier.padding(horizontal = 10.dp))
+                    else -> shownDelete.detail?.let { Text(it, style = Type.Caption, maxLines = 1, modifier = Modifier.padding(horizontal = 10.dp)) }
+                }
+            }
         }
         if (view.more > 0) {
             val open = actions.openViewer

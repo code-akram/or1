@@ -48,6 +48,7 @@ object StepLabels {
             "calendar" -> when (action) {
                 "add" -> "Add “${args.optString("title").take(40)}” to the calendar on ${args.optString("start").replace('T', ' ')}"
                 "delete" -> "Delete calendar event ${args.optLong("event_id")}"
+                "move" -> "Move calendar event ${args.optLong("event_id")} to ${args.optString("start").replace('T', ' ')}"
                 else -> "Checked the calendar"
             }
             "contacts" -> if (action == "add") {

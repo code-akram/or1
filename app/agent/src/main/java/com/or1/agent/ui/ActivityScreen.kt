@@ -121,5 +121,6 @@ private fun DayCard(effects: List<Effect>, zone: ZoneId, modifier: Modifier = Mo
 
 private fun sourceOf(effect: Effect): String = when (effect.source) {
     "routine" -> effect.sourceLabel?.let { "Routine · $it" } ?: "Routine"
+    "card" -> "You"
     else -> "Chat"
 }

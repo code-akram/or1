@@ -345,4 +345,9 @@ class LiveCardsTest {
         assertTrue(quote.length <= 321)
         assertTrue(quote.endsWith("…"))
     }
+
+    @Test fun moveRequestNamesTheEventAndWhenItIs() {
+        assertEquals("Move “Dentist” (Mon 12 Oct 14:30) to ", CalendarDays.moveRequest(DayRow(event(1, "Dentist", 14, 30), day, "14:30", false), zone))
+        assertEquals("Move “Holiday” (Mon 12 Oct, all day) to ", CalendarDays.moveRequest(DayRow(allDay(2, "Holiday"), day, null, false), zone))
+    }
 }

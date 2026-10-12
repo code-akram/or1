@@ -112,6 +112,17 @@ object CalendarDays {
         else -> DateTimeFormatter.ofPattern("EEE d MMM", Locale.US).format(day)
     }
 
+    /**
+     * The composer text for the calendar card's Move: "Move “Dentist” (Tue 14 Oct 14:00) to ", or "(Tue 14 Oct, all
+     * day)"; the user says or types the rest.
+     */
+    fun moveRequest(row: DayRow, zone: ZoneId): String {
+        val e = row.event
+        val day = DateTimeFormatter.ofPattern("EEE d MMM", Locale.US).format(row.day)
+        val at = if (e.allDay) "$day, all day" else "$day ${HHMM.format(java.time.Instant.ofEpochMilli(e.begin).atZone(zone))}"
+        return "Move “${e.title.ifBlank { "(No title)" }}” ($at) to "
+    }
+
     /** The card's title: "Today", or "Today – Sun 18 Oct" for a range. */
     fun title(from: LocalDate, days: Int, today: LocalDate): String =
         if (days <= 1) dayName(from, today) else "${dayName(from, today)} – ${dayName(from.plusDays(days - 1L), today)}"

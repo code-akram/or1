@@ -79,6 +79,10 @@ class ActivityTest {
             "Added “Dentist” to the calendar, 2026-10-12 10:00",
             classify("calendar", args("action" to "add", "title" to "Dentist", "start" to "2026-10-12T10:00"), undo("calendar_delete", "event_id" to 5, "title" to "Dentist"))!!.label,
         )
+        assertEquals(
+            "Moved “Dentist” to Tue 13 Oct 16:00",
+            classify("calendar", args("action" to "move", "event_id" to 5, "start" to "2026-10-13T16:00"), undo("calendar_move", "event_id" to 5, "title" to "Dentist", "to" to "Tue 13 Oct 16:00"))!!.label,
+        )
         assertEquals("Added contact Test Person", classify("contacts", args("action" to "add", "name" to "Test Person"), undo("contact_delete", "raw_contact_id" to 9))!!.label)
         assertEquals("Created routine “Morning”", classify("routines", args("action" to "add", "prompt" to "p"), undo("routine_remove", "id" to "abc", "title" to "Morning"))!!.label)
         assertEquals("Saved a note: “Likes tea”", classify("memory", args("action" to "add", "text" to "Likes tea"), undo("memory_remove", "text" to "Likes tea"))!!.label)

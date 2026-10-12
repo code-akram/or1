@@ -222,7 +222,7 @@ fun VoiceModeHost(open: Boolean, onClose: () -> Unit, actions: CardActions = Car
     ) {
         val closing = remember(actions) {
             fun wrap(a: (() -> Unit)?) = a?.let { { onClose(); it() } }
-            CardActions(wrap(actions.openRoutines), wrap(actions.openTriage), wrap(actions.openViewer))
+            CardActions(wrap(actions.openRoutines), wrap(actions.openTriage), wrap(actions.openViewer), actions.ask?.let { ask -> { text: String -> onClose(); ask(text) } })
         }
         CompositionLocalProvider(LocalCardActions provides closing) { VoiceMode(onClose) }
     }

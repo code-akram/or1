@@ -428,9 +428,15 @@ private fun BlockMeter(fraction: () -> Float, modifier: Modifier = Modifier) {
 
 /**
  * What cards can open outside the stream. Null (the routines thread) hides the button. [openViewer] opens the work
- * screen viewer (the media, email and calendar cards).
+ * screen viewer (the media, email and calendar cards); [ask] starts a request in the composer (the calendar's Move).
  */
-class CardActions(val openRoutines: (() -> Unit)? = null, val openTriage: (() -> Unit)? = null, val openViewer: (() -> Unit)? = null)
+class CardActions(
+    val openRoutines: (() -> Unit)? = null,
+    val openTriage: (() -> Unit)? = null,
+    val openViewer: (() -> Unit)? = null,
+    /** Opens the composer with this text, for the user to finish ("Move “Dentist” (Tue 14:00) to "). */
+    val ask: ((String) -> Unit)? = null,
+)
 
 val LocalCardActions = staticCompositionLocalOf { CardActions() }
 

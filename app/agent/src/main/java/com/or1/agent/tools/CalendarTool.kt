@@ -33,6 +33,7 @@ class CalendarTool(context: Context) {
         "list" -> ToolOutput(list(args))
         "add" -> add(args)
         "delete" -> delete(args)
+        "move" -> move(args)
         else -> throw IllegalArgumentException("Unknown action '$action'.")
     }
 
@@ -117,6 +118,63 @@ class CalendarTool(context: Context) {
             "Deleted “$title” (event id $id).",
             undo = JSONObject().put("op", "calendar_restore").put("title", title).put("event", event).put("reminders", reminders(id)),
         )
+    }
+
+    /**
+     * Moves an event to a new `start`, keeping its length unless `end` or `duration_minutes` says otherwise. The undo
+     * moves it back. Repeating events are refused (the change would move every occurrence).
+     */
+    fun move(args: JSONObject): ToolOutput {
+        val id = args.optLong("event_id", -1).takeIf { it >= 0 } ?: throw IllegalArgumentException("move needs `event_id` (see list).")
+        val start = args.optString("start").ifBlank { throw IllegalArgumentException("move needs the new `start` (YYYY-MM-DDTHH:MM, or YYYY-MM-DD for all day).") }
+        val event = snapshot(id) ?: return ToolOutput("No event with id $id.")
+        require(!event.has(Events.RRULE) && !event.has(Events.RDATE)) { "That's a repeating event; moving it would move every occurrence." }
+        val title = event.optString(Events.TITLE)
+        val zone = ZoneId.systemDefault()
+        val wasAllDay = event.optInt(Events.ALL_DAY) == 1
+        val oldStart = event.getLong(Events.DTSTART)
+        val oldEnd = event.optLong(Events.DTEND, oldStart + 3_600_000)
+        val allDay = !start.contains('T')
+        val (begin, end) = if (allDay) {
+            val day = parseDate(start.substringBefore('T'))
+            val b = day.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+            val e = args.optString("end").takeIf { it.isNotBlank() }?.let { parseDate(it.substringBefore('T')).plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli() }
+                ?: (b + if (wasAllDay) (oldEnd - oldStart).coerceAtLeast(DAY_MS) else DAY_MS)
+            b to e
+        } else {
+            val s = parseDateTime(start)
+            val b = s.atZone(zone).toInstant().toEpochMilli()
+            val e = args.optString("end").takeIf { it.isNotBlank() }?.let { parseDateTime(it).atZone(zone).toInstant().toEpochMilli() }
+                ?: args.optInt("duration_minutes", 0).takeIf { it > 0 }?.let { b + it.coerceAtMost(24 * 60) * 60_000L }
+                ?: (b + if (wasAllDay) 3_600_000 else oldEnd - oldStart)
+            b to e
+        }
+        require(end > begin) { "`end` must be after `start`." }
+        setTimes(id, begin, end, allDay, if (allDay) "UTC" else zone.id)
+        val undo = JSONObject().put("op", "calendar_move").put("event_id", id).put("title", title)
+            .put("dtstart", oldStart).put("dtend", oldEnd).put("all_day", wasAllDay)
+            .put("tz", event.optString(Events.EVENT_TIMEZONE, if (wasAllDay) "UTC" else zone.id))
+        val shownAt = if (allDay) "${shownDay.format(java.time.Instant.ofEpochMilli(begin).atZone(ZoneOffset.UTC))} (all day)"
+        else shown.format(java.time.Instant.ofEpochMilli(begin).atZone(zone))
+        return ToolOutput("Moved “$title” to $shownAt (event id $id).", undo = undo.put("to", shownAt))
+    }
+
+    /** Undo of move. */
+    fun moveBack(spec: JSONObject): String {
+        val id = spec.getLong("event_id")
+        snapshot(id) ?: error("The event was deleted since.")
+        setTimes(id, spec.getLong("dtstart"), spec.getLong("dtend"), spec.optBoolean("all_day"), spec.optString("tz", ZoneId.systemDefault().id))
+        return "Moved “${spec.optString("title")}” back."
+    }
+
+    private fun setTimes(id: Long, begin: Long, end: Long, allDay: Boolean, tz: String) {
+        val values = ContentValues().apply {
+            put(Events.DTSTART, begin)
+            put(Events.DTEND, end)
+            put(Events.ALL_DAY, if (allDay) 1 else 0)
+            put(Events.EVENT_TIMEZONE, tz)
+        }
+        check(resolver.update(ContentUris.withAppendedId(Events.CONTENT_URI, id), values, null, null) > 0) { "The calendar provider did not move the event." }
     }
 
     /** Undo of add. */
@@ -220,6 +278,7 @@ class CalendarTool(context: Context) {
 
     companion object {
         private const val LOCAL_ACCOUNT = "Phone"
+        private const val DAY_MS = 86_400_000L
         const val DEFAULT_DAYS = 7
         const val MAX_DAYS = 366
 

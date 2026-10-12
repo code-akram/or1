@@ -241,7 +241,12 @@ fun ChatScreen() {
                         keyboard?.hide()
                         triageOpen = true
                     }
-                    val cardActions = remember { CardActions(openRoutines = { page = Page.ROUTINES }, openTriage = openTriage, openViewer = { closeComposer(); viewerOpen = true }) }
+                    val cardActions = remember {
+                        CardActions(
+                            openRoutines = { page = Page.ROUTINES }, openTriage = openTriage, openViewer = { closeComposer(); viewerOpen = true },
+                            ask = { text -> page = null; input.setText(text); expanded = true; input.focusAndShowKeyboard() },
+                        )
+                    }
                     val openEvidence = remember { { e: com.or1.agent.Effect -> closeComposer(); evidence = e } }
                     val streamTap = remember { { closeComposer() } }
                     CompositionLocalProvider(LocalEvidenceViewer provides openEvidence, LocalStreamTap provides streamTap) {
