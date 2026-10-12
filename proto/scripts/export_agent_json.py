@@ -21,6 +21,16 @@ for tool in tools:
             "type: enters `text` into the focused field (tap the field first).",
             "type: replaces the text of `element` (an editable field) or of the focused field with `text`.",
         )
+    # The user can't use apps themselves: when they ask to see one, the phone shows it full screen after the turn.
+    if tool["name"] == "open":
+        tool["description"] += (
+            " Set show=true when the user asked to open, show or see an app or page (\"open Gmail\", \"show me my "
+            "inbox\"), not when you open it to do a task: when your turn ends it opens full screen for them."
+        )
+        tool["input_schema"]["properties"]["show"] = {
+            "type": "boolean",
+            "description": "The user asked to see it: show it to them full screen when your turn ends.",
+        }
 
 # Routines need the agent running on the phone (alarms, the notification listener), so only the phone gets them.
 tools.append({
@@ -60,7 +70,8 @@ tools.append({
     "name": "media",
     "description": (
         "Songs and videos through the apps' media sessions, without their screens. status: what each media app is "
-        "playing (title, playing or paused, and whether it's on its own screen). play with `query`: searches an app "
+        "playing (title, playing or paused, whether it's on its own screen and whether sound is coming out) and the media "
+        "volume. play with `query`: searches an app "
         "(`package`, default YouTube) and starts the top result in one step; use it whenever the user names something "
         "to play, instead of opening the app and searching. play, pause, next, previous without `query`: control the "
         "media that's playing (or `package`). Check the result: some apps (YouTube outside a playlist) ignore next "
@@ -85,11 +96,17 @@ while you work; screen, act and open all use it, and the user sees a live thumbn
 In shell, target it with `am start --display $OR1_DISPLAY ...` and `input -d $OR1_DISPLAY ...`. On the work screen, \
 key home shows an empty screen and recents is not available.
 
-Media: a song or video the user asks for keeps playing after your turn on its own screen (the screen tool notes it), \
-so your work screen is free and other requests (a timer, a message) don't interrupt it; the user hears it. To play something the user names, use media play with a \
-query. Control what plays with the media tool (status, pause, play, next); open the app only when you need its \
-screen (to pick something else), which brings it back to your work screen. To stop a ringing or running timer use clock stop_timer, \
-not the Clock app.
+Media: a song or video the user asks for lives on its own screen and keeps playing after your turn (the screen tool \
+notes it), so your work screen is free and other requests (a timer, a message) don't interrupt it; the user hears it. To \
+play something the user names, use media play with a query. Control what plays with the media tool (status, pause, \
+play, next); open the app only when you need its screen (to pick something else or skip an ad): screen and act then \
+work on its own screen, where it keeps playing, until you open another app. If the user says they can't hear it or \
+it isn't playing, check media status (it says whether sound is coming out and the media volume) and tell them what \
+you found; change the volume only if they ask. To stop a ringing or running timer use clock stop_timer, not the \
+Clock app.
+
+Showing apps: the user never uses apps themselves; when they ask to open or see one ("open Gmail", "show me \
+YouTube"), open it with show=true and reply in one short sentence: it opens full screen for them when your turn ends.
 
 Routine runs: a message starting with [Routine ...] was started by a routine, not typed by the user just now. Do what \
 its request says and reply in one or two self-contained sentences.

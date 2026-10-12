@@ -25,10 +25,13 @@ class ShellTool {
             rootAvailable -> "the agent app's uid (content query can't return results to root)"
             else -> "the agent app's uid (no root available)"
         }
-        // The agent's hidden work display, for `am start --display` and `input -d`.
-        // A launch of the app playing on the stage would bring it to the front there, not here: bring it back first.
-        com.or1.agent.Stage.recallFor(command)
-        val script = "export OR1_DISPLAY=${HiddenDisplay.ensure() ?: 0}; $command"
+        // The display the agent works on, for `am start --display` and `input -d`: the stage when the command starts the
+        // app living there (where it plays), else the work display.
+        val stage = com.or1.agent.Stage.kept.value?.takeIf { com.or1.agent.Stage.claims(command) }
+        val work = HiddenDisplay.ensure() ?: 0
+        if (stage != null) HiddenDisplay.useStage(stage) else if (command.contains("am start")) HiddenDisplay.useWork()
+        val display = com.or1.agent.Stage.id?.takeIf { HiddenDisplay.onStage() } ?: work
+        val script = "export OR1_DISPLAY=$display; $command"
         // Arm the leak guard: an `am start` without --display opens on the real screen and gets moved over.
         HiddenDisplay.markActivity()
         val result = exec(if (asRoot) listOf("su", "-c", script) else listOf("sh", "-c", script)) ?: "Could not start a shell."

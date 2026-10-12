@@ -4,6 +4,8 @@ import android.app.SearchManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Rect
+import android.media.AudioAttributes
+import android.media.AudioManager
 import android.os.SystemClock
 import android.provider.MediaStore
 import android.view.accessibility.AccessibilityNodeInfo
@@ -25,7 +27,7 @@ class MediaTool(private val context: Context) {
     suspend fun run(args: JSONObject, screen: ScreenTools): ToolOutput {
         val action = args.getString("action")
         val sessions = NowState.media.value
-        if (action == "status") return ToolOutput(MediaStatus.describe(sessions, Stage.kept.value, ::label))
+        if (action == "status") return ToolOutput(MediaStatus.describe(sessions, Stage.kept.value, ::label, audio()))
         val query = args.optString("query").trim()
         if (query.isNotEmpty()) {
             require(action == "play") { "`query` goes with action play." }
@@ -35,13 +37,14 @@ class MediaTool(private val context: Context) {
             ?: return ToolOutput("Nothing is playing: no app has a media session.")
         require(action in setOf("play", "pause", "next", "previous")) { "Unknown action '$action'." }
         if (!NowState.transport(pkg, action)) return ToolOutput("${label(pkg)} has no media session; open it to use its controls.")
+        if (action != "pause" && pkg == Stage.kept.value) Stage.noteStarted()
         delay(1200)
-        return ToolOutput(MediaStatus.describe(NowState.media.value, Stage.kept.value, ::label))
+        return ToolOutput(MediaStatus.describe(NowState.media.value, Stage.kept.value, ::label, audio()))
     }
 
     /**
-     * Searches [pkg] for [query] on the work display and starts the top result, instead of open, search, read, tap
-     * (four slow steps on this phone). Music apps play from the search intent directly; YouTube shows results, so the
+     * Searches [pkg] for [query] on the stage (where it then keeps playing; nothing moves afterwards) and starts the top
+     * result, instead of open, search, read, tap (four slow steps on this phone). Music apps play from the search intent directly; YouTube shows results, so the
      * first video in them (not an ad, a Short or a live stream) is clicked. Done when the app's session plays something
      * new. If nothing plays in time, the screen goes back so the agent can pick by hand.
      */
@@ -55,6 +58,9 @@ class MediaTool(private val context: Context) {
         // A fresh task: an open watch page would otherwise stay on top of the new results.
         intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK)
         val before = NowState.media.value.firstOrNull { it.pkg == pkg }?.title
+        // The stage becomes the app's first, so the launch lands there (the work display if there's no stage).
+        HiddenDisplay.ensure()
+        Stage.host(pkg)
         val displayId = HiddenDisplay.launch(intent, pkg)
         val until = SystemClock.elapsedRealtime() + SEARCH_MS
         var clicked: String? = null
@@ -66,7 +72,9 @@ class MediaTool(private val context: Context) {
             // clicked (the user asked for the same video again).
             if (now != null && MediaSearch.started(now.title, before, clicked)) {
                 val what = now.title?.let { "“$it”" } ?: "the top result"
-                return ToolOutput("Playing $what in ${label(pkg)} ($pkg), the top result for “$query”. It keeps playing on its own screen after your turn.")
+                Stage.noteStarted()
+                val quiet = audio().quietNote()?.let { " $it" }.orEmpty()
+                return ToolOutput("Playing $what in ${label(pkg)} ($pkg), the top result for “$query”. It keeps playing on its own screen after your turn.$quiet")
             }
             if (clicked == null) {
                 clicked = withContext(Dispatchers.IO) { clickTopResult(displayId, query) }
@@ -114,12 +122,32 @@ class MediaTool(private val context: Context) {
         for (i in 0 until node.childCount) node.getChild(i)?.let { collect(it, out, texts, depth + 1) }
     }
 
+    /** The media volume and which apps' players are sending sound out right now. */
+    private fun audio(): AudioNow {
+        val am = context.getSystemService(AudioManager::class.java)
+        val stream = AudioManager.STREAM_MUSIC
+        val sounding = runCatching {
+            am.activePlaybackConfigurations.filter { config ->
+                // getPlayerState and getClientUid are system APIs (platform signature).
+                val cls = config.javaClass
+                cls.getMethod("getPlayerState").invoke(config) == PLAYER_STATE_STARTED &&
+                    config.audioAttributes.usage in setOf(AudioAttributes.USAGE_MEDIA, AudioAttributes.USAGE_GAME, AudioAttributes.USAGE_UNKNOWN)
+            }.map { config -> config.javaClass.getMethod("getClientUid").invoke(config) as Int }
+                // Without MODIFY_AUDIO_ROUTING the list is anonymized (uid -1): then who plays is unknown.
+                .takeIf { uids -> uids.none { it < 0 } }
+                ?.flatMap { uid -> context.packageManager.getPackagesForUid(uid)?.toList().orEmpty() }?.toSet()
+        }.getOrNull()
+        return AudioNow(am.getStreamVolume(stream), am.getStreamMaxVolume(stream), am.isStreamMute(stream), sounding, HiddenAudio::isMuted)
+    }
+
     private fun label(pkg: String): String = runCatching {
         context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(pkg, 0)).toString()
     }.getOrDefault(pkg)
 }
 
 private const val YOUTUBE = "com.google.android.youtube"
+/** AudioPlaybackConfiguration.PLAYER_STATE_STARTED (a system API constant). */
+private const val PLAYER_STATE_STARTED = 2
 /** How long a search gets to start playing (a cold start, the results loading, the video buffering). */
 private const val SEARCH_MS = 15_000L
 private const val POLL_MS = 300L
@@ -156,9 +184,13 @@ object MediaStatus {
     fun target(sessions: List<MediaNow>, kept: String?): String? =
         kept?.takeIf { k -> sessions.any { it.pkg == k } } ?: sessions.firstOrNull { it.playing }?.pkg ?: sessions.firstOrNull()?.pkg
 
-    /** One line per media session: app (package), state, title, and whether it plays on its own screen. */
-    fun describe(sessions: List<MediaNow>, kept: String?, label: (String) -> String): String {
-        if (sessions.isEmpty()) return "Nothing is playing: no app has a media session."
+    /**
+     * One line per media session: app (package), state, title, whether it plays on its own screen and whether sound is
+     * coming out; then the media volume (with a warning when it's too low to hear), so "it's not playing" can be told
+     * apart from "it plays too quietly".
+     */
+    fun describe(sessions: List<MediaNow>, kept: String?, label: (String) -> String, audio: AudioNow? = null): String {
+        if (sessions.isEmpty()) return "Nothing is playing: no app has a media session." + audio?.let { "\n${it.volumeLine()}" }.orEmpty()
         return sessions.joinToString("\n") { m ->
             val state = when {
                 m.playing -> "playing"
@@ -168,7 +200,39 @@ object MediaStatus {
             }
             val what = listOfNotNull(m.title?.let { "“$it”" }, m.artist?.let { "by $it" }).joinToString(" ")
             val where = if (m.pkg == kept) " (on its own screen; keeps playing while you work)" else ""
-            "${label(m.pkg)} (${m.pkg}): $state${if (what.isNotEmpty()) " $what" else ""}$where"
-        }
+            val sound = audio?.soundOf(m.pkg, m.playing)?.let { "; $it" }.orEmpty()
+            "${label(m.pkg)} (${m.pkg}): $state${if (what.isNotEmpty()) " $what" else ""}$where$sound"
+        } + audio?.let { "\n${it.volumeLine()}" }.orEmpty()
+    }
+}
+
+/**
+ * What the speaker is doing: the media volume ([volume] of [max], [muted]), the packages whose players are sending
+ * sound out ([sounding]; null when that couldn't be read) and which apps or1 itself keeps quiet ([mutedByOr1]).
+ */
+class AudioNow(
+    val volume: Int,
+    val max: Int,
+    val muted: Boolean,
+    val sounding: Set<String>?,
+    val mutedByOr1: (String) -> Boolean = { false },
+) {
+    /** At or under a fifth of the range, media is barely audible on this phone's speaker (2/25 is about -51 dB). */
+    val quiet: Boolean get() = muted || volume * 5 <= max
+
+    fun volumeLine(): String = "Media volume: $volume of $max" + when {
+        muted -> " (muted)."
+        quiet -> " (very quiet: the user may not hear it)."
+        else -> "."
+    }
+
+    /** For a `media play` result: a warning only when the user may not hear it. */
+    fun quietNote(): String? = if (quiet) volumeLine() else null
+
+    fun soundOf(pkg: String, playing: Boolean): String? = when {
+        mutedByOr1(pkg) -> "muted by or1 while it's on the work screen"
+        sounding == null || !playing -> null
+        pkg in sounding -> "sound is coming out"
+        else -> "no sound coming out yet (loading or buffering)"
     }
 }

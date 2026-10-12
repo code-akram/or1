@@ -19,15 +19,16 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 /**
- * The stage: a second off-screen display where media the user asked for keeps playing, so the agent's work display is
- * free for the next request (stopping a timer, reading a message) without covering the video, which would stop it.
+ * The stage: a second off-screen display where media lives, so the agent's work display is free for everything else
+ * (stopping a timer, reading a message) without covering the video, which would stop it.
  *
- * When a request ends (or the viewer closes) with a media app playing in front of the work display (or starting
- * within [START_MS]), its task moves here ([admit]) and the work display parks as usual. Here it is never muted and
- * stays awake while it plays; [kept] is that app (the Now strip's media chip, the live media card, the `media` tool).
- * The agent controls it through its media session; when it needs the app's screen (it opens the app, or the viewer
- * opens), the task moves back to the work display ([recall]) and returns here at the end if it still plays. After
- * [IDLE_MS] without playing, it goes back to the (parked) work display and the stage is removed ([retire]).
+ * Roles, not moves: media stays here and the agent works on it here. `media play` with a query launches straight onto
+ * the stage ([host]); a media app found playing in front of the work display when a request ends (or starts, or the
+ * viewer closes) moves here once ([admit]). Nothing moves back while it plays: when the agent opens the kept app, the
+ * tools act on the stage ([com.or1.agent.tools.HiddenDisplay.targetDisplay]), and the viewer shows the stage when it's
+ * opened from the media card or chip. Here the app is never muted and stays awake while it plays; [kept] is that app
+ * (the Now strip's media chip, the live media card, the `media` tool). After [IDLE_MS] without playing (and nobody
+ * watching it in the viewer) it goes back to the parked work display and the stage is removed ([retire]).
  */
 object Stage {
     private const val TAG = "or1-media"
@@ -43,24 +44,53 @@ object Stage {
     private var decide: Job? = null
     private var watch: Job? = null
 
-    private val screen = VirtualScreen("or1-stage")
+    internal val screen = VirtualScreen("or1-stage")
 
     private val _kept = MutableStateFlow<String?>(null)
     /** The package playing on the stage, or null. */
     val kept: StateFlow<String?> = _kept
 
+    private val _starts = MutableStateFlow(0)
+    /** Bumped each time media starts on the stage (a new app here, or `media play`/next/previous): voice mode's cue. */
+    val starts: StateFlow<Int> = _starts
+
     val id: Int? get() = screen.id
+
+    /** Downscaled frames of the stage, for the act card's evidence strip while the agent works here. */
+    val preview: StateFlow<android.graphics.Bitmap?> get() = screen.preview
 
     /**
      * The live media card shows the stage's video: the display renders straight into [surface] (a TextureView's), so
-     * it plays smoothly; [hide] hands the display back to its frame reader.
+     * it plays smoothly; [hide] hands the display back to its frame reader. The viewer, when open, goes over both.
      */
-    fun show(surface: android.view.Surface) = screen.attachViewer(surface)
+    fun show(surface: android.view.Surface) = screen.attachCard(surface)
 
-    fun hide() = screen.detachViewer()
+    fun hide() = screen.detachCard()
+
+    /** The viewer is showing the stage (opened from the media card or chip): the user watches and can use the app. */
+    fun attachViewer(surface: android.view.Surface): Boolean = synchronized(lock) {
+        val stageId = screen.id ?: return false
+        screen.attachViewer(surface)
+        screen.keepAwake()
+        // Its keyboard shows inside the viewer (searching YouTube), like the work screen's.
+        HiddenDisplay.setImePolicy(HiddenDisplay.IME_LOCAL, stageId)
+        true
+    }
+
+    fun detachViewer() {
+        screen.detachViewer()
+        screen.id?.let { HiddenDisplay.setImePolicy(HiddenDisplay.IME_FALLBACK, it) }
+        HiddenDisplay.restoreFocus()
+    }
+
+    val viewerAttached: Boolean get() = screen.viewerAttached
 
     fun init(context: Context) {
         this.context = context.applicationContext
+    }
+
+    fun noteStarted() {
+        _starts.value++
     }
 
     private fun playing(pkg: String) = NowState.media.value.any { it.pkg == pkg && it.playing }
@@ -78,7 +108,7 @@ object Stage {
         synchronized(lock) {
             decide?.cancel()
             val front = workFront()
-            if (front == null || !StagePolicy.mayPlay(front, playing(front), MediaApps.KNOWN + MediaApps.seen)) {
+            if (front == null || front == _kept.value || !StagePolicy.mayPlay(front, playing(front), MediaApps.KNOWN + MediaApps.seen)) {
                 HiddenDisplay.park()
                 return
             }
@@ -99,34 +129,48 @@ object Stage {
     fun beforeRequest() = synchronized(lock) {
         decide?.cancel()
         val front = workFront() ?: return@synchronized
-        if (playing(front)) admit(front)
+        if (front != _kept.value && playing(front)) admit(front)
     }
 
-    /** Moves [pkg]'s task from the work display to the stage. */
+    /** Moves [pkg]'s task, playing in front of the work display, to the stage. */
     private fun admit(pkg: String): Boolean {
         val workId = HiddenDisplay.id ?: return false
-        val task = Tasks.topOf(pkg, workId) ?: return false
+        if (Tasks.topOf(pkg, workId) == null) return false
+        return host(pkg) != null
+    }
+
+    /**
+     * Makes the stage [pkg]'s: creates (or wakes) it, moves [pkg]'s task over from the work display if it's there, and
+     * keeps it ([kept], heard, awake while it plays). `media play` calls this before launching its search here, so
+     * nothing moves afterwards. Returns the stage's display id, or null if there's no stage (the caller uses the work
+     * display).
+     */
+    fun host(pkg: String): Int? = synchronized(lock) {
         val stageId = screen.id ?: try {
             screen.create(context) { scope.launch { synchronized(lock) { stopped() } } }
         } catch (e: Exception) {
             Log.e(TAG, "could not create the stage; $pkg stays on the work display", e)
-            return false
+            return null
         }
+        // The keyboard belongs to the real screen unless the user is in the viewer (see HiddenDisplay.IME_FALLBACK).
+        HiddenDisplay.setImePolicy(HiddenDisplay.IME_FALLBACK, stageId)
+        val workId = HiddenDisplay.id
         // One app plays here at a time: the one before goes back to the work display, which parks (it stops).
         _kept.value?.takeIf { it != pkg }?.let { old ->
-            Tasks.topOf(old, stageId)?.let { Tasks.move(it, workId) }
+            if (workId != null) Tasks.topOf(old, stageId)?.let { Tasks.move(it, workId) }
             Log.i(TAG, "$old leaves the stage for $pkg")
         }
-        if (!Tasks.move(task, stageId)) return false
+        val moved = workId != null && Tasks.topOf(pkg, workId)?.let { Tasks.move(it, stageId) } == true
         screen.unpark()
         screen.holdAwake()
         // Moving the task brought the stage to the top, with focus: give it back to the chat.
-        HiddenDisplay.restoreFocus()
+        if (moved) HiddenDisplay.restoreFocus()
         HiddenAudio.unmute(pkg)
+        if (_kept.value != pkg) noteStarted()
         _kept.value = pkg
-        Log.i(TAG, "$pkg plays on the stage (display $stageId); the work display is free")
+        Log.i(TAG, "$pkg ${if (moved) "moved to" else "lives on"} the stage (display $stageId); the work display is free")
         watch(pkg)
-        return true
+        stageId
     }
 
     /** Keeps the stage awake while [pkg] plays; [retire]s it after [IDLE_MS] without playing, or when it's gone. */
@@ -142,14 +186,15 @@ object Stage {
                     why = "it left the stage"
                     break
                 }
-                if (playing(pkg)) {
+                // Playing, or someone is using it in the viewer.
+                if (playing(pkg) || screen.viewerAttached) {
                     idleSince = null
                     screen.keepAwake()
                     continue
                 }
                 val now = SystemClock.elapsedRealtime()
                 if (idleSince == null) idleSince = now
-                // A request may be using the work display; retire once it's free.
+                // A request may be working on the stage; retire once it's free.
                 if (now - idleSince >= IDLE_MS && !busy()) {
                     why = "it hasn't played for ${IDLE_MS / 1000} s"
                     break
@@ -181,38 +226,18 @@ object Stage {
         _kept.value = null
     }
 
-    /**
-     * The agent (or the user, through the viewer) needs [pkg]'s screen: if it's the kept app (any package when null),
-     * its task moves back in front of the work display, heard, and the stage goes. True if it was on the stage.
-     */
-    fun recall(pkg: String? = null): Boolean = synchronized(lock) {
-        val kept = _kept.value ?: return false
-        if (pkg != null && pkg != kept) return false
-        decide?.cancel()
-        watch?.cancel()
-        val workId = HiddenDisplay.ensure()
-        val task = screen.id?.let { Tasks.topOf(kept, it) }
-        if (workId != null && task != null) {
-            // It's what the user asked to hear: the work display's muting leaves it alone.
-            HiddenAudio.onPlaying(kept)
-            Tasks.move(task, workId)
-            HiddenDisplay.restoreFocus()
-            Log.i(TAG, "$kept back on the work display")
-        }
-        screen.release()
-        _kept.value = null
-        true
-    }
+    /** Whether [pkg] is the app living on the stage (the agent's tools then act there). */
+    fun owns(pkg: String?): Boolean = pkg != null && pkg == _kept.value && screen.id != null
 
     /**
-     * A shell command about to start an activity: if it targets the kept app (by package or by an address that opens
-     * in it), [recall] it first. A launch onto the work display doesn't move a task that lives on another display.
+     * Whether a shell command starts an activity of the kept app (by package or by an address that opens in it): it
+     * then runs against the stage, where that app lives (a launch onto the work display doesn't move a task that lives
+     * on another display).
      */
-    fun recallFor(command: String) {
-        val kept = _kept.value ?: return
-        if (!command.contains("am start")) return
-        val hit = command.contains(kept) || StagePolicy.addresses(command).any { resolve(it) == kept }
-        if (hit) recall(kept)
+    fun claims(command: String): Boolean {
+        val kept = _kept.value ?: return false
+        if (screen.id == null || !command.contains("am start")) return false
+        return command.contains(kept) || StagePolicy.addresses(command).any { resolve(it) == kept }
     }
 
     /** The package an address opens in, if one handles it. */

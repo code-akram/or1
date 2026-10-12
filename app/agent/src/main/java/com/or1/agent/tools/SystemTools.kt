@@ -308,7 +308,11 @@ class SystemTools(private val context: Context) {
         // The package we expect in front afterwards; null when a chooser would pick (or nothing resolves yet).
         val expect = intent.resolveActivity(context.packageManager)?.packageName?.takeIf { it != "android" }
         if (HiddenDisplay.ensure() == null) screen.dismissShade()
-        HiddenDisplay.launch(intent, expect)
+        val landed = HiddenDisplay.launch(intent, expect)
+        // The user asked to see it: the viewer opens on it when the turn ends (not for an app on the real screen).
+        if (args.optBoolean("show") && landed != android.view.Display.DEFAULT_DISPLAY) {
+            HiddenDisplay.showAfterTurn = expect ?: HiddenDisplay.agentPackage.value ?: "?"
+        }
         HiddenDisplay.settle(OPEN_SETTLE_MS)
         return screen.screen(false)
     }

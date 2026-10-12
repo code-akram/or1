@@ -98,12 +98,12 @@ private object MediaFrames {
  * (500 ms, 400 ms while this card follows it; no SurfaceView, the viewer keeps that one); while it plays on the stage
  * after its turn, the video itself ([StageVideo]). Paused: a play badge; playing: steady `live` blocks on an ink0 60%
  * mat (so they show on bright frames). Frozen (an older card, another app in front, or the media stopped): the last
- * frame under an ink0 40% veil. The whole card opens the viewer, which is the player.
+ * frame under an ink0 40% veil. The whole card opens the viewer on the screen the app is on (the stage, where it plays).
  */
 @Composable
 internal fun MediaCard(card: ResultCard.Media, live: Boolean) {
     val context = LocalContext.current
-    val open = LocalCardActions.current.openViewer
+    val actions = LocalCardActions.current
     val app = remember(card.pkg) { appLabel(context, card.pkg) }
     val front by HiddenDisplay.foregroundPackage.collectAsState()
     val kept by com.or1.agent.Stage.kept.collectAsState()
@@ -111,6 +111,8 @@ internal fun MediaCard(card: ResultCard.Media, live: Boolean) {
     val session = sessions.firstOrNull { it.pkg == card.pkg }
     // In front of the work display, or playing on the stage after its turn.
     val staged = kept == card.pkg
+    // The card opens the player: the stage when its app lives there, else the work screen.
+    val open = if (staged) actions.openStage ?: actions.openViewer else actions.openViewer
     val following = live && (front == card.pkg || staged) && session?.stopped != true
     val playing = following && session?.playing == true
     var frame by remember(card.key) { mutableStateOf(MediaFrames.get(card.key)) }

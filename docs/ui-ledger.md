@@ -119,7 +119,7 @@ Rendered from tool-call arguments/results plus local sources — never by parsin
   the agent). Count pinned in Now; the same component is the triage sheet.
 - **Email summary:** from/subject chips, 2–3 serif lines, Open (viewer on Gmail), Archive (agent).
 - **Video/audio:** 16:9 live crop of the work display (500 ms; 300 ms while a media app is on top) with a play badge;
-  tap opens the viewer, which is the player.
+  tap opens the viewer on the stage, where the media lives (the card is the player; nothing moves).
 - **Setting toggled:** one row with state + Undo (a promoted receipt row).
 - **Routine created:** trigger sentence, next run, Edit.
 

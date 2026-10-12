@@ -10,6 +10,8 @@
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <uses-permission android:name="android.permission.MODIFY_DAY_NIGHT_MODE" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- Who is playing (AudioPlaybackConfiguration uids): the media tool's "sound is coming out" (platform signature). -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_ROUTING" tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />

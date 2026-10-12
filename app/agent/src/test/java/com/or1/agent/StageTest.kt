@@ -1,6 +1,7 @@
 package com.or1.agent
 
 import android.media.session.PlaybackState
+import com.or1.agent.tools.AudioNow
 import com.or1.agent.tools.MediaSearch
 import com.or1.agent.tools.MediaStatus
 import org.junit.Assert.assertEquals
@@ -43,6 +44,30 @@ class StageTest {
             MediaStatus.describe(listOf(yt, music), kept = yt.pkg, label = label),
         )
         assertEquals("Nothing is playing: no app has a media session.", MediaStatus.describe(emptyList(), null, label))
+    }
+
+    @Test fun statusSaysWhetherSoundComesOutAndHowLoud() {
+        val label = { pkg: String -> if (pkg == yt.pkg) "YouTube" else "Spotify" }
+        // 2/25 was the volume of the "no sound at all" report: barely audible on this speaker.
+        val quiet = AudioNow(volume = 2, max = 25, muted = false, sounding = setOf(yt.pkg))
+        assertEquals(
+            "YouTube (com.google.android.youtube): playing “Lofi radio” (on its own screen; keeps playing while you work); sound is coming out\n" +
+                "Spotify (com.spotify.music): paused “Song” by Band\n" +
+                "Media volume: 2 of 25 (very quiet: the user may not hear it).",
+            MediaStatus.describe(listOf(yt, music), kept = yt.pkg, label = label, audio = quiet),
+        )
+        assertEquals("Media volume: 2 of 25 (very quiet: the user may not hear it).", quiet.quietNote())
+        val loud = AudioNow(volume = 12, max = 25, muted = false, sounding = emptySet())
+        assertNull(loud.quietNote())
+        assertEquals("no sound coming out yet (loading or buffering)", loud.soundOf(yt.pkg, playing = true))
+        assertNull(loud.soundOf(music.pkg, playing = false))
+        assertEquals("Media volume: 12 of 25 (muted).", AudioNow(12, 25, muted = true, sounding = null).volumeLine())
+        val hushed = AudioNow(12, 25, muted = false, sounding = null, mutedByOr1 = { it == yt.pkg })
+        assertEquals("muted by or1 while it's on the work screen", hushed.soundOf(yt.pkg, playing = true))
+        assertEquals(
+            "Nothing is playing: no app has a media session.\nMedia volume: 12 of 25.",
+            MediaStatus.describe(emptyList(), null, label, loud),
+        )
     }
 
     @Test fun searchPicksTheFirstVideoNotAnAdOrShort() {

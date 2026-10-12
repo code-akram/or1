@@ -72,6 +72,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.or1.agent.AgentHub
+import com.or1.agent.tools.HiddenDisplay
 import com.or1.agent.ChatItem
 import com.or1.agent.NotifListener
 import com.or1.agent.RoutineAct
@@ -106,6 +107,8 @@ fun ChatScreen() {
         val input = remember { ComposerInput() }
         var expanded by rememberSaveable { mutableStateOf(false) }
         var viewerOpen by remember { mutableStateOf(false) }
+        // The viewer shows the stage (the media's own screen) instead of the work screen.
+        var viewerStage by remember { mutableStateOf(false) }
         var voiceOpen by remember { mutableStateOf(false) }
         // What the wake phrase's utterance said, when it ended before voice mode opened.
         var voiceFirst by remember { mutableStateOf<String?>(null) }
@@ -179,6 +182,23 @@ fun ChatScreen() {
             if (!input.hasText) expanded = false
         }
 
+        // The viewer opens where or1 works (the stage while it works in the app playing there), or on the stage.
+        fun openViewer(stage: Boolean = HiddenDisplay.onStage() && (AgentHub.busy.value || AgentHub.routineBusy.value)) {
+            viewerStage = stage && com.or1.agent.Stage.id != null
+            viewerOpen = true
+        }
+
+        // The turn ended on an app the user asked to see (`open` with show): it opens full screen, once voice mode (which
+        // closes itself after saying its reply) isn't over it.
+        val showScreen by AgentHub.showScreen.collectAsState()
+        LaunchedEffect(showScreen, voiceOpen) {
+            val stage = showScreen ?: return@LaunchedEffect
+            if (voiceOpen) return@LaunchedEffect
+            AgentHub.screenShown()
+            closeComposer()
+            openViewer(stage)
+        }
+
         // Everything that can be open over the idle chat closes; typed text stays in the composer.
         fun goHome() {
             scope.launch { drawer.close() }
@@ -245,7 +265,8 @@ fun ChatScreen() {
                     }
                     val cardActions = remember {
                         CardActions(
-                            openRoutines = { page = Page.ROUTINES }, openTriage = openTriage, openViewer = { closeComposer(); viewerOpen = true },
+                            openRoutines = { page = Page.ROUTINES }, openTriage = openTriage, openViewer = { closeComposer(); openViewer() },
+                            openStage = { closeComposer(); openViewer(stage = true) },
                             ask = { text -> page = null; input.setText(text); expanded = true; input.focusAndShowKeyboard() },
                         )
                     }
@@ -269,6 +290,7 @@ fun ChatScreen() {
                                         },
                                         onTriage = openTriage,
                                         onRoutine = { page = Page.ROUTINES },
+                                        onWatch = { closeComposer(); openViewer(stage = true) },
                                     )
                                 }
                                 // Tapping empty space closes the keyboard: with the system UI locked down there's no back button.
@@ -290,7 +312,7 @@ fun ChatScreen() {
                                         key(conversation) {
                                             CompositionLocalProvider(LocalCardActions provides cardActions) {
                                                 Conversation(
-                                                    items, routineActs, busy, homeTaps, scrollTo, onOpenPreview = { viewerOpen = true },
+                                                    items, routineActs, busy, homeTaps, scrollTo, onOpenPreview = { openViewer() },
                                                     onAtBottom = { streamAtBottom = it },
                                                 )
                                             }
@@ -307,7 +329,7 @@ fun ChatScreen() {
                                     onPlusAction = {
                                         when (it) {
                                             PlusAction.NEW_CHAT -> AgentHub.newConversation()
-                                            PlusAction.WORK_SCREEN -> viewerOpen = true
+                                            PlusAction.WORK_SCREEN -> openViewer()
                                             PlusAction.DRAWER -> { closeComposer(); scope.launch { drawer.open() } }
                                         }
                                     },
@@ -319,17 +341,20 @@ fun ChatScreen() {
                             }
                             pastChat?.let { HistoryView(it, onClose = { pastChat = null }) }
                             when (page) {
-                                Page.ROUTINES -> RoutinesView(onClose = { page = null }, onOpenPreview = { viewerOpen = true })
+                                Page.ROUTINES -> RoutinesView(onClose = { page = null }, onOpenPreview = { openViewer() })
                                 Page.TODAY -> ActivityView(onClose = { page = null })
                                 Page.MEMORY -> MemoryView(onClose = { page = null })
                                 null -> {}
                             }
                             if (viewerOpen) {
-                                WorkViewer(
-                                    onClose = { viewerOpen = false },
-                                    // Back to the chat with the composer open, to ask about what's on the work screen.
-                                    onAsk = { viewerOpen = false; page = null; expanded = true },
-                                )
+                                key(viewerStage) {
+                                    WorkViewer(
+                                        onClose = { viewerOpen = false },
+                                        // Back to the chat with the composer open, to ask about what's on the work screen.
+                                        onAsk = { viewerOpen = false; page = null; expanded = true },
+                                        stage = viewerStage,
+                                    )
+                                }
                             }
                             evidence?.let { EvidenceViewer(it, onClose = { evidence = null }) }
                             TriageSheet(triageOpen, onClose = { triageOpen = false })

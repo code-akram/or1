@@ -58,13 +58,15 @@ private const val MAX_CHIPS = 4
  * lives outside the stream's LazyColumn, and each chip ticks itself, so a tick recomposes one Text.
  *
  * [onTimer] goes to the timer's card and returns true, or returns false (no card in the stream) and the chip offers
- * Cancel. The alarm chip offers Off. [onTriage] opens the triage sheet; [onRoutine] the Routines page.
+ * Cancel. The alarm chip offers Off. [onTriage] opens the triage sheet; [onRoutine] the Routines page. The media chip
+ * offers Pause/Play, and Watch ([onWatch]: the viewer on the stage) while its app plays there.
  */
 @Composable
 fun NowStrip(
     onTimer: (NowTimer) -> Boolean = { false },
     onTriage: () -> Unit = {},
     onRoutine: () -> Unit = {},
+    onWatch: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val chips by NowState.chips.collectAsState()
@@ -108,6 +110,9 @@ fun NowStrip(
                         Text(name, style = Type.Step.copy(color = Palette.Text), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 120.dp))
                     }
                     if (open) ChipAction(if (playing) "Pause" else "Play") { NowState.playPause(chip.media.pkg) }
+                    if (open && onWatch != null && chip.media.pkg == com.or1.agent.Stage.kept.value) {
+                        ChipAction("Watch") { revealed = null; onWatch() }
+                    }
                 }
                 is NowChip.Notifications -> Chip("${chip.count} new notifications. Open triage.", onClick = onTriage) {
                     Glyph(Icons.Bell)

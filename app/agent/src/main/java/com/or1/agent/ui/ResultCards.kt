@@ -440,6 +440,8 @@ class CardActions(
     val openRoutines: (() -> Unit)? = null,
     val openTriage: (() -> Unit)? = null,
     val openViewer: (() -> Unit)? = null,
+    /** Opens the viewer on the stage, where the media lives (the media card while its app plays there). */
+    val openStage: (() -> Unit)? = null,
     /** Opens the composer with this text, for the user to finish ("Move “Dentist” (Tue 14:00) to "). */
     val ask: ((String) -> Unit)? = null,
 )

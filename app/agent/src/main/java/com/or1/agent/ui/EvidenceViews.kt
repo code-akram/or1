@@ -67,14 +67,18 @@ import kotlinx.coroutines.withContext
 private const val FOCUS_MS = 60_000L
 
 /**
- * The evidence strip (docs/ui-ledger.md §4): a 96 dp full-width crop of the work display's live preview (2 fps),
+ * The evidence strip (docs/ui-ledger.md §4): a 96 dp full-width crop of the live preview (2 fps) of the screen or1
+ * works on (the work display, or the stage while it works in the app playing there),
  * centred on the agent's last tap, with a 10 dp ember ring there for [Evidence.RING_MS]. Frames and the ring are read
  * in the draw phase, so a new frame only redraws this canvas; a tap recomposes it once. No semantics: the
  * "Watch or take over" row under it is the accessible way in.
  */
 @Composable
 fun EvidenceStrip(onOpen: () -> Unit) {
-    val preview = HiddenDisplay.preview.collectAsState()
+    val agentPkg by HiddenDisplay.agentPackage.collectAsState()
+    val kept by com.or1.agent.Stage.kept.collectAsState()
+    val onStage = agentPkg != null && agentPkg == kept
+    val preview = remember(onStage) { if (onStage) com.or1.agent.Stage.preview else HiddenDisplay.preview }.collectAsState()
     val lastTap = Evidence.lastTap.collectAsState()
     val ring = remember { mutableStateOf<TapMark?>(null) }
     val mark = lastTap.value

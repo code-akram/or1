@@ -75,9 +75,14 @@ class ScreenTools(private val context: Context) {
         HiddenDisplay.ensure() // wakes the work display if it was parked between requests
         val text = read()
         // Canvas-drawn UIs expose no elements; show the agent a picture instead.
-        val needImage = withScreenshot || elements.isEmpty() && !text.contains(OWN_UI) && text != EMPTY_WORK_SCREEN
-        // Media the user asked for plays on its own screen (the stage), not this one.
-        val stage = com.or1.agent.Stage.kept.value?.let { "\n(Playing on its own screen, not this one: $it. Control it with the media tool; open it only to use its screen.)" }
+        val needImage = withScreenshot || elements.isEmpty() && !text.contains(OWN_UI) && text != EMPTY_WORK_SCREEN && !text.contains(STARTING)
+        // Media the user asked for plays on its own screen (the stage).
+        val kept = com.or1.agent.Stage.kept.value
+        val stage = when {
+            kept == null -> null
+            HiddenDisplay.onStage() -> "\n(This is $kept's own screen, where it keeps playing after your turn; your other apps open on the work screen.)"
+            else -> "\n(Playing on its own screen, not this one: $kept. Control it with the media tool; open it to work on its screen.)"
+        }
         return ToolOutput(text + stage.orEmpty(), if (needImage) screenshot() else null)
     }
 
@@ -92,6 +97,8 @@ class ScreenTools(private val context: Context) {
             topWindowRoot(service) ?: return "Foreground: unknown. No window content is available."
         } else {
             HiddenDisplay.topAppWindow(displayId)?.root
+                // A cold start (Gmail: ~5.5 s) has a task before it has a window: not an empty screen.
+                ?: HiddenDisplay.startingApp(displayId)?.let { return "Foreground: $it ($STARTING). Read the screen again in a moment." }
         }
         val pkg = root?.packageName?.toString() ?: context.packageName
         if (pkg == context.packageName) {
@@ -351,5 +358,6 @@ class ScreenTools(private val context: Context) {
     private companion object {
         const val OWN_UI = "the or1 chat (the agent's own interface)"
         const val EMPTY_WORK_SCREEN = "Foreground: none. The work screen is empty: open an app to work on it."
+        const val STARTING = "still starting: its screen isn't drawn yet"
     }
 }

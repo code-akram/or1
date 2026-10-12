@@ -15,6 +15,11 @@ import android.util.Log
  * Left alone: the alarm app (its alarms must ring even if the agent just set one through it), and apps sharing a system
  * uid (Settings runs as system), since the op would apply to that whole uid. setMode is a system API: reflection, with
  * MANAGE_APP_OPS_MODES (platform signature).
+ *
+ * Unmuting sets the op to MODE_ALLOWED, never MODE_DEFAULT: AudioFlinger plays a track only when the op is exactly
+ * ALLOWED (OpPlayAudioMonitor), and DEFAULT is stored as an explicit mode (PLAY_AUDIO's default is ALLOWED), so a
+ * DEFAULT app plays at -inf dB for good (modes persist across reboots). Builds before 2026-10-12 did that: YouTube and
+ * Gmail were silent from their first mute on. [init] repairs any app left that way.
  */
 object HiddenAudio {
     private const val TAG = "or1-display"
@@ -28,11 +33,28 @@ object HiddenAudio {
     fun init(context: Context) {
         this.context = context.applicationContext
         // Anything still muted is left over from a previous process.
-        muted().forEach { setMode(it, AppOpsManager.MODE_DEFAULT) }
+        muted().forEach { setMode(it, AppOpsManager.MODE_ALLOWED) }
         prefs.edit().remove(KEY).apply()
+        Thread(::repairSilenced, "or1-audio-repair").start()
+    }
+
+    /** Apps whose PLAY_AUDIO an older build left at MODE_DEFAULT (silent, see above) are allowed again. */
+    private fun repairSilenced() {
+        val ops = context.getSystemService(AppOpsManager::class.java)
+        val apps = runCatching { context.packageManager.getInstalledApplications(0) }.getOrDefault(emptyList())
+        for (app in apps) {
+            if (app.uid < Process.FIRST_APPLICATION_UID) continue
+            val mode = runCatching { ops.unsafeCheckOpRawNoThrow(OP, app.uid, app.packageName) }.getOrNull()
+            if (mode == AppOpsManager.MODE_DEFAULT && setMode(app.packageName, AppOpsManager.MODE_ALLOWED)) {
+                Log.i(TAG, "${app.packageName} was left silent (PLAY_AUDIO default): allowed")
+            }
+        }
     }
 
     private fun muted(): Set<String> = prefs.getStringSet(KEY, emptySet()).orEmpty()
+
+    /** Whether or1 keeps [pkg] quiet right now (its PLAY_AUDIO app-op is ignored). */
+    fun isMuted(pkg: String): Boolean = ::context.isInitialized && pkg in muted()
 
     /** Apps playing media the agent started: never muted until [park]. */
     private val heard = mutableSetOf<String>()
@@ -70,7 +92,7 @@ object HiddenAudio {
     @Synchronized
     fun unmute(pkg: String?) {
         if (pkg == null || pkg !in muted()) return
-        setMode(pkg, AppOpsManager.MODE_DEFAULT)
+        setMode(pkg, AppOpsManager.MODE_ALLOWED)
         prefs.edit().putStringSet(KEY, muted() - pkg).apply()
         Log.i(TAG, "unmuted $pkg")
     }

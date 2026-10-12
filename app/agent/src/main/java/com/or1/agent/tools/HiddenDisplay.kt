@@ -47,6 +47,14 @@ object HiddenDisplay {
     /** The package the agent is working in, so tools know which display it's on. */
     @Volatile
     private var currentPackage: String? = null
+        set(value) {
+            field = value
+            _agentPackage.value = value
+        }
+
+    private val _agentPackage = MutableStateFlow<String?>(null)
+    /** [currentPackage], for the UI: when it's the app on the stage, the evidence strip follows the stage. */
+    val agentPackage: StateFlow<String?> = _agentPackage
 
     /** Downscaled frames of the work display, at most every 500 ms. */
     val preview: StateFlow<Bitmap?> get() = work.preview
@@ -71,7 +79,7 @@ object HiddenDisplay {
     /** Converts frames every [FAST_PREVIEW_MS] instead of every 500 ms; the live media card sets it while it shows playback. */
     fun fastPreview(fast: Boolean) = work.fastPreview(fast)
 
-    private val viewerAttached get() = work.viewerAttached
+    val viewerAttached get() = work.viewerAttached
 
     fun init(context: Context) {
         this.context = context.applicationContext
@@ -80,10 +88,50 @@ object HiddenDisplay {
 
     val id: Int? get() = work.id
 
-    /** The display tools should act on: the hidden one, unless it's unavailable or the current app refused it. */
+    /**
+     * The display tools should act on: the stage while the agent works in the app living there ([com.or1.agent.Stage]),
+     * else the work display, unless it's unavailable or the current app refused it (the real screen).
+     */
     fun targetDisplay(): Int {
+        stageTarget()?.let { return it }
         val hidden = id ?: return Display.DEFAULT_DISPLAY
         return if (currentPackage != null && currentPackage in refused) Display.DEFAULT_DISPLAY else hidden
+    }
+
+    private fun stageTarget(): Int? = com.or1.agent.Stage.id?.takeIf { com.or1.agent.Stage.owns(currentPackage) }
+
+    /** The agent is working in the app on the stage (the evidence strip and "Watch" follow the stage). */
+    fun onStage(): Boolean = stageTarget() != null
+
+    /** The screen the agent works on, when it's one of or1's (frames, settling). */
+    private fun active(): VirtualScreen = if (onStage()) com.or1.agent.Stage.screen else work
+
+    /**
+     * A request starts on the work display: the app on the stage is worked on only once the agent opens it (or a shell
+     * command starts it) in this request.
+     */
+    fun beginRequest() {
+        if (onStage()) currentPackage = null
+        showAfterTurn = null
+    }
+
+    /**
+     * The package the user asked to see (`open` with show): when the request ends, the viewer opens on it instead of
+     * the work display parking under it. Set by the open tool, taken by AgentHub at the end of the request.
+     */
+    @Volatile
+    var showAfterTurn: String? = null
+
+    /** The agent is about to work in the stage's app (a shell `am start` of it): the tools act on the stage. */
+    fun useStage(pkg: String) {
+        currentPackage = pkg
+        refreshForegroundApp()
+    }
+
+    /** The agent starts something on the work display (a shell `am start`): the tools act there again. */
+    fun useWork() {
+        if (onStage()) currentPackage = null
+        refreshForegroundApp()
     }
 
     /** Creates the display if needed. Returns its id, or null if the agent should use the real screen. */
@@ -114,8 +162,8 @@ object HiddenDisplay {
     }
 
     /** Keyboard policy for the hidden display: FALLBACK while the agent works, LOCAL while the user is viewing it. */
-    fun setImePolicy(policy: Int) {
-        val displayId = id ?: return
+    fun setImePolicy(policy: Int, displayId: Int = id ?: -1) {
+        if (displayId < 0) return
         try {
             val wm = Class.forName("android.view.WindowManagerGlobal").getMethod("getWindowManagerService").invoke(null)!!
             wm.javaClass.getMethod("setDisplayImePolicy", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
@@ -209,7 +257,7 @@ object HiddenDisplay {
     val focusReturned: StateFlow<Int> = _focusReturned
 
     fun restoreFocus() {
-        if (viewerAttached || id == null) return
+        if (viewerAttached || com.or1.agent.Stage.viewerAttached || id == null && com.or1.agent.Stage.id == null) return
         // Re-starting the real screen's top task (the chat, or an app the user brought to the front) goes through
         // the activity starter, which moves its display back on top without relaunching anything. The direct routes
         // don't work in 13: WMS.moveDisplayToTop isn't on the binder interface, and setFocusedTask/moveTaskToFront
@@ -237,14 +285,14 @@ object HiddenDisplay {
      * The newest frame of the display, downscaled like [preview]: for evidence frames taken just before a committing
      * tap, which mustn't hold the tap up.
      */
-    fun latestFrame(maxWaitMs: Long = 40): Bitmap? = work.latestFrame(maxWaitMs)
+    fun latestFrame(maxWaitMs: Long = 40): Bitmap? = active().latestFrame(maxWaitMs)
 
     /**
      * After an action: waits until the work display stops drawing, at most [maxMs] (see [VirtualScreen.settle]); the
      * whole [maxMs] on the real screen, whose frames we don't see.
      */
     suspend fun settle(maxMs: Long) {
-        if (targetDisplay() == Display.DEFAULT_DISPLAY) kotlinx.coroutines.delay(maxMs) else work.settle(maxMs)
+        if (targetDisplay() == Display.DEFAULT_DISPLAY) kotlinx.coroutines.delay(maxMs) else active().settle(maxMs)
     }
 
     /** The full-screen viewer renders straight from the display; the reader takes over again when it closes. */
@@ -260,13 +308,15 @@ object HiddenDisplay {
     fun detachViewer() {
         work.detachViewer()
         setImePolicy(IME_FALLBACK)
-        id?.let { HiddenAudio.mute(topAppPackage(it)) }
+        // Quiet again, unless it plays what the user was watching (it moves to the stage: Stage.park).
+        id?.let { topAppPackage(it) }?.takeIf { pkg -> com.or1.agent.NowState.media.value.none { it.pkg == pkg && it.playing } }
+            ?.let { HiddenAudio.mute(it) }
         // Touching the work screen moved focus (and its display) to the top; give the chat its keyboard back.
         handler.post(restoreFocusRunnable)
     }
 
     private val foregroundRunnable = Runnable {
-        val pkg = id?.let { topAppPackage(it) }?.takeIf { it != context.packageName }
+        val pkg = (if (onStage()) com.or1.agent.Stage.id else id)?.let { topAppPackage(it) }?.takeIf { it != context.packageName }
         _foregroundPackage.value = pkg
         _foregroundApp.value = pkg?.let { p ->
             runCatching { context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(p, 0)).toString() }.getOrDefault(p)
@@ -288,9 +338,12 @@ object HiddenDisplay {
      */
     suspend fun launch(intent: Intent, expectPackage: String?): Int {
         markActivity()
-        val target = ensure()
-        // A task on the stage would come to the front there: move it back first.
-        (expectPackage ?: intent.data?.toString()?.let { com.or1.agent.Stage.resolve(it) })?.let { com.or1.agent.Stage.recall(it) }
+        val work = ensure()
+        // The app living on the stage opens there, where it plays; the tools follow it.
+        val opens = expectPackage ?: intent.data?.toString()?.let { com.or1.agent.Stage.resolve(it) }
+        currentPackage = if (com.or1.agent.Stage.owns(opens)) opens else null
+        val target = stageTarget() ?: work
+        refreshForegroundApp()
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         if (target == null || expectPackage != null && expectPackage in refused) {
             currentPackage = expectPackage
@@ -335,20 +388,33 @@ object HiddenDisplay {
         return Display.DEFAULT_DISPLAY
     }
 
-    /** Waits for [pkg] (or any app other than [before]) to be the top task on [displayId], then for its window. */
+    /**
+     * Waits for [pkg] (or any app other than [before]) to be the top task on [displayId] (up to 3 s), then for its
+     * window (up to [WINDOW_MS] from the launch: a cold start of Gmail takes ~5.5 s to draw on this phone, and a screen
+     * read before that finds nothing).
+     */
     private suspend fun waitForApp(displayId: Int, pkg: String?, before: String?): String? {
         var landed: String? = null
-        repeat(15) {
+        val start = SystemClock.uptimeMillis()
+        while (true) {
             delay(200)
+            val waited = SystemClock.uptimeMillis() - start
             // The task list is authoritative; accessibility windows lag behind it.
             val top = Tasks.on(displayId).firstOrNull()?.second ?: topAppPackage(displayId)
             if (top != null && top != context.packageName && (if (pkg != null) top == pkg else top != before)) {
                 landed = top
                 if (topAppPackage(displayId) == top) return top
             }
+            if (landed == null && waited >= TASK_MS || waited >= WINDOW_MS) return landed
         }
-        return landed
     }
+
+    /** The app whose task is on top of [displayId] while accessibility lists no window for it yet (still starting). */
+    fun startingApp(displayId: Int): String? =
+        Tasks.on(displayId).firstOrNull()?.second?.takeIf { it != context.packageName && topAppWindow(displayId) == null }
+
+    private const val TASK_MS = 3_000L
+    private const val WINDOW_MS = 8_000L
 
     /** The package of the topmost application window on [displayId], from accessibility. */
     fun topAppPackage(displayId: Int): String? = topAppWindow(displayId)?.root?.packageName?.toString()
@@ -367,8 +433,8 @@ object HiddenDisplay {
     }
 
     /** Gives the hidden display's top task input focus, so injected keys reach it. */
-    fun focus(): Boolean {
-        val task = Tasks.on(id ?: return false).firstOrNull()?.first ?: return false
+    fun focus(displayId: Int = targetDisplay()): Boolean {
+        val task = Tasks.on(displayId).firstOrNull()?.first ?: return false
         return Tasks.setFocused(task)
     }
 
@@ -389,7 +455,7 @@ object HiddenDisplay {
     fun injectKey(keyCode: Int, displayId: Int): Boolean {
         deliveringKey = true
         try {
-            focus()
+            focus(displayId)
             Thread.sleep(100) // let the focus change reach input before the key does
             val now = SystemClock.uptimeMillis()
             val down = KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0)
@@ -414,6 +480,7 @@ object HiddenDisplay {
     /** Starts [intent] on the hidden display without waiting for a window (e.g. AlarmClock intents with SKIP_UI). */
     fun start(intent: Intent) {
         markActivity()
+        useWork()
         val target = ensure()
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         if (target == null) {
@@ -425,18 +492,20 @@ object HiddenDisplay {
     }
 
     /**
-     * A new (or emptied) display has nothing on it, so the viewer would show black: start its app grid. Accessibility
-     * lists a display only once it has windows, so "no app window" covers both.
+     * A new (or emptied) display has nothing on it, so the viewer would show black: start its app grid. Asks the task
+     * list, not accessibility: a display that was just woken lists no windows for a moment, and the grid would cover
+     * the app the user came to see.
      */
     fun showHomeIfEmpty() {
         val displayId = id ?: return
-        if (A11yService.instance != null && topAppWindow(displayId) == null) goHome()
+        if (Tasks.on(displayId).isEmpty()) goHome()
     }
 
     /** Starts [WorkHomeActivity] on the hidden display: its "home screen" (it has no launcher). */
     fun goHome() {
         val target = id ?: return
         currentPackage = null
+        refreshForegroundApp()
         context.startActivity(
             Intent(context, WorkHomeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             ActivityOptions.makeBasic().setLaunchDisplayId(target).toBundle(),

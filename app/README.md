@@ -120,7 +120,8 @@ the chat never leaves the screen.
   `Type.Title` (Sans 20/26 medium, `PageHeader`).
 - `MemoryScreen.kt` (What or1 knows): the memory notes; tap or ⋯ Edit edits one in place (a blank one is deleted),
   ⋯ Delete removes it at once with the 4 s Undo pill putting it back (`restoreNote`).
-- `WorkViewer.kt`: the work display full screen, and usable. Touches are forwarded (scaled to 720x1600); while or1
+- `WorkViewer.kt`: the work display full screen, and usable (or the stage, opened from the media card or the media
+  chip's Watch: Back and Ask or1, no app grid; nothing moves between displays for it). Touches are forwarded (scaled to 720x1600); while or1
   works, the first touch stops it (`AgentHub.takeOver`, with "You took over the agent screen…" in the chat). The
   header shows the app in front and three blocks (marching ember while or1 works, steady green on the user's turn). The bottom bar has Back, Apps
   (the work display's home, `WorkHomeActivity`, is an app grid, `AppGrid.kt`; apps open on the same display) and
@@ -148,13 +149,28 @@ thumbnail, viewer and screenshots instead of black (and screenshots of them go t
   only produces frames when something on it changes. A playing video or spinner never stops, so those wait the full
   time; so does the real screen and the viewer (its frames go to the viewer's surface, which or1 doesn't see).
 - `media play` with a `query` (`tools/MediaTool.kt`): one call instead of open, search, read and tap. It starts the
-  app's MEDIA_PLAY_FROM_SEARCH activity (else ACTION_SEARCH) in a fresh task on the work display; music apps play from
+  app's MEDIA_PLAY_FROM_SEARCH activity (else ACTION_SEARCH) in a fresh task on the stage (below); music apps play from
   it, YouTube shows results, and the first video row there is clicked (`MediaSearch.pick`: a " - "-separated row with
   a duration, not "Sponsored", not a Short, not a seek bar), only once the results page shows the query. It's clicked
   through accessibility, not tapped: switching videos, YouTube shows the old player over the results for a moment.
   Done when the session plays a new title (or the clicked one); a clicked video that hasn't started after 3 s gets a
   session play. Measured: ~7 s from a cold YouTube, 4–9 s switching videos; a spoken "play the Dune trailer" took
   9 s end to end with two model calls (was ~37 s and five calls).
+- The stage (`Stage.kt`): a second display of the same kind where media lives, so the work display is free for the
+  next request. Roles, not moves: `media play` makes the stage the app's first (`Stage.host`) and launches there; a
+  media app found playing in front of the work display when a request starts or ends (or the viewer closes) moves
+  there once (`Stage.admit`). Nothing moves back while it plays. When the agent opens the kept app (`open`, a URI that
+  resolves to it, or a shell `am start` naming it: `Stage.claims`), `HiddenDisplay.targetDisplay()` returns the stage
+  and `screen`/`act`/keys/settle/frames work there (`HiddenDisplay.onStage()`; the evidence strip follows it); the
+  next request starts on the work display again (`beginRequest`), and opening another app goes back to it. On the
+  stage the app is never muted and stays awake while it plays or the viewer shows it; after 2 min paused it goes
+  back to the parked work display and the stage is removed. One app at a time: a different media app replaces it.
+  Surfaces (`VirtualScreen`): the viewer's over the live media card's TextureView over the frame reader; settle waits
+  the full time when the reader doesn't get the frames.
+- `open` waits for the app's task (3 s), then its window (up to 8 s from the launch: a cold Gmail draws after ~5.5 s).
+  A screen read that finds a task without a window says the app is still starting instead of "the work screen is
+  empty". `open` with `show: true` (phone-only schema, for "open Gmail", "show me YouTube") makes the turn end with
+  the viewer on that app (`AgentHub.showScreen`; voice mode says its reply and closes first) instead of parking it.
 - Its own display group keeps it working while the phone is off or locked. A screen wake lock bound to the
   display keeps it awake during a request; at the end the display is parked (surface removed, apps stop)
   and the lock released.
@@ -177,7 +193,15 @@ thumbnail, viewer and screenshots instead of black (and screenshots of them go t
   app-op (MANAGE_APP_OPS_MODES). Parking the display at the end of the request restores them, and so does watching
   the app in the viewer (and the debug `--es display front`). The alarm app (anything handling SET_ALARM) and system-uid apps (Settings)
   are never muted. Measured with the mic: a player on the hidden display went from -7 dBFS (tone 77 dB clear) unmuted
-  to about -42 dBFS (room noise) muted.
+  to about -42 dBFS (room noise) muted. Restoring sets MODE_ALLOWED: AudioFlinger plays a track only when the op is
+  exactly ALLOWED, and MODE_DEFAULT is stored as its own mode, so an app set back to DEFAULT stayed silent for good
+  (its track at `G db -inf` in `dumpsys media.audio_flinger`). Builds before 2026-10-12 did that, which is why YouTube
+  had no sound at any volume; on start or1 sets any app left at DEFAULT back to ALLOWED (7 on this phone, YouTube and
+  Gmail among them).
+- `media status` reports, per session, whether its player is sending sound out (`AudioManager`'s active playback
+  configurations; their uids need MODIFY_AUDIO_ROUTING) and the media volume, flagged when it's a fifth of the range
+  or less; `media play` adds that warning to its result. The prompt has the agent check it when the user can't hear
+  something, and not change the volume unless asked.
 - `shell` arms the leak guard before and after each command, so an `am start` without `--display` gets moved too.
 - Debug: `am broadcast -n com.or1.agent/.DebugReceiver --es display info|create|launch|tap|back|home|park|snap|front|move|tool …`
   (results in logcat tag `or1-display` and `files/display.txt`).

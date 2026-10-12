@@ -286,7 +286,10 @@ fun VoiceModeHost(open: Boolean, onClose: () -> Unit, actions: CardActions = Car
     ) {
         val closing = remember(actions) {
             fun wrap(a: (() -> Unit)?) = a?.let { { onClose(); it() } }
-            CardActions(wrap(actions.openRoutines), wrap(actions.openTriage), wrap(actions.openViewer), actions.ask?.let { ask -> { text: String -> onClose(); ask(text) } })
+            CardActions(
+                wrap(actions.openRoutines), wrap(actions.openTriage), wrap(actions.openViewer), wrap(actions.openStage),
+                actions.ask?.let { ask -> { text: String -> onClose(); ask(text) } },
+            )
         }
         CompositionLocalProvider(LocalCardActions provides closing) { VoiceMode(onClose, first) }
     }
@@ -365,6 +368,7 @@ private fun VoiceMode(onClose: () -> Unit, first: String?) {
                     heard = h.text
                     turnKey = null
                     phase = Phase.WORKING
+                    val startsBefore = Stage.starts.value
                     val turn = ask(h.text)
                     turnKey = turn?.key
                     val id = "voice-${turn?.key ?: SystemClock.uptimeMillis()}"
@@ -373,7 +377,7 @@ private fun VoiceMode(onClose: () -> Unit, first: String?) {
                     // The turn started a song or video: the user wants to hear it, not a microphone open over it (the
                     // recogniser would hear the media too), nor a long reply over its start. Say one sentence without
                     // barge-in, then close.
-                    val media = workMediaPlaying()
+                    val media = turnStartedMedia(startsBefore)
                     val summary = turn?.let(::spokenSummary) ?: "Sorry, that didn't work."
                     val said = if (media) Sentences.split(summary).firstOrNull() ?: summary else summary
                     Log.i(VOICE_TAG, "voice mode says: $said")
@@ -382,7 +386,12 @@ private fun VoiceMode(onClose: () -> Unit, first: String?) {
                         pending = barged.text?.let { WakePhrase.strip(Barge.userPart(it, said)) }?.ifBlank { null }
                     }
                     if (media && pending == null) {
-                        Log.i(VOICE_TAG, "voice mode closes: media plays")
+                        Log.i(VOICE_TAG, "voice mode closes: the turn started media")
+                        break
+                    }
+                    // The turn opened an app the user asked to see: the chat shows it full screen once this closes.
+                    if (AgentHub.showScreen.value != null && pending == null) {
+                        Log.i(VOICE_TAG, "voice mode closes: showing the app")
                         break
                     }
                     quietSince = SystemClock.uptimeMillis()
@@ -427,7 +436,10 @@ private fun VoiceMode(onClose: () -> Unit, first: String?) {
         Column(Modifier.fillMaxSize().systemBarsPadding().padding(horizontal = 24.dp)) {
             val actions = LocalCardActions.current
             Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.CenterStart) {
-                NowStrip(onTriage = { actions.openTriage?.invoke() }, onRoutine = { actions.openRoutines?.invoke() })
+                NowStrip(
+                    onTriage = { actions.openTriage?.invoke() }, onRoutine = { actions.openRoutines?.invoke() },
+                    onWatch = actions.openStage,
+                )
             }
             Spacer(Modifier.height(8.dp))
             UserLine(input, phase, heard)
@@ -584,22 +596,27 @@ private class Barged(val text: String?)
 private const val BARGE_AFTER_MS = 600L
 
 /**
- * Speaks [text] to the end, a tap, or a barge-in (returned). Without a TTS engine, shows it for a while instead. While
- * speaking it listens ([bargeIn]); when it ends without one, the listening is dropped.
+ * The turn started a song or video (media play, next, a new app on the stage, or a player started in front of the work
+ * display that the stage is about to take): voice mode then gets out of the way. A turn that only did something else
+ * while media plays ("Open Gmail", "Set a timer") keeps voice mode open.
  */
-/** Media plays on the work display: kept after a turn, or the app in front there playing (Stage may not have decided yet). */
-private suspend fun workMediaPlaying(): Boolean {
+private suspend fun turnStartedMedia(startsBefore: Int): Boolean {
     // Stage gives a just-tapped player a few seconds to start; so does this.
     repeat(8) {
-        if (Stage.kept.value != null) return true
+        if (Stage.starts.value != startsBefore) return true
         val front = HiddenDisplay.foregroundPackage.value
-        if (front != null && NowState.media.value.any { it.pkg == front && it.playing }) return true
-        if (front == null || front !in MediaApps.KNOWN && front !in MediaApps.seen) return false
+        if (front == null || front == Stage.kept.value) return false
+        if (NowState.media.value.any { it.pkg == front && it.playing }) return true
+        if (front !in MediaApps.KNOWN && front !in MediaApps.seen) return false
         delay(500)
     }
     return false
 }
 
+/**
+ * Speaks [text] to the end, a tap, or a barge-in (returned). Without a TTS engine, shows it for a while instead. While
+ * speaking it listens ([bargeIn]); when it ends without one, the listening is dropped.
+ */
 private suspend fun say(
     output: SpeechOutput, input: SpeechInput, text: String, id: String, bargeIn: Boolean = true, showSilently: (String?) -> Unit,
 ): Barged? {

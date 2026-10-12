@@ -66,6 +66,8 @@ object AgentHub {
     /** A chat idle this long starts afresh: it matches the prompt cache's 1-hour TTL, past which the whole history
      * would be re-written to the cache anyway, and old context rarely helps. */
     private const val AUTO_NEW_CHAT_MS = 60 * 60_000L
+    /** How long a turn's "show this app" waits for the chat to open the viewer before the work display parks. */
+    private const val SHOW_WAIT_MS = 15_000L
     private const val GAPS_FILE = "request-gaps.jsonl"
     private const val NETWORK_WAIT_MS = 2 * 60_000L
     private const val RETRY_DELAY_MS = 30_000L
@@ -78,6 +80,17 @@ object AgentHub {
     val items: StateFlow<List<ChatItem>> = _items
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy
+
+    private val _showScreen = MutableStateFlow<Boolean?>(null)
+    /**
+     * A chat request ended on an app the user asked to see (`open` with show): the viewer should open on it (true: on
+     * the stage, where that app lives). The chat takes it with [screenShown] once voice mode isn't over it.
+     */
+    val showScreen: StateFlow<Boolean?> = _showScreen
+
+    fun screenShown() {
+        _showScreen.value = null
+    }
     /** Routine runs have their own thread (the Routines screen), so they don't interleave with the chat. */
     private val _conversation = MutableStateFlow(0)
     /** Bumped on every new conversation, so the chat starts a fresh list instead of animating the old items away. */
@@ -312,7 +325,22 @@ object AgentHub {
                     ok = !outcome.failed && !outcome.stopped
                     requestId?.let { recordReply(it, outcome.reply, outcome.cost, outcome.requests, outcome.seconds) }
                     returnToComposer()
-                    Stage.park()
+                    val show = HiddenDisplay.showAfterTurn?.takeIf { ok }
+                    HiddenDisplay.showAfterTurn = null
+                    if (show == null) {
+                        Stage.park()
+                    } else {
+                        // The viewer opens on it (it parks the work display when it closes). If nobody opens it soon
+                        // (voice mode still speaking takes a few seconds), park as usual.
+                        _showScreen.value = Stage.owns(show)
+                        scope.launch {
+                            delay(SHOW_WAIT_MS)
+                            if (_showScreen.value != null) {
+                                _showScreen.value = null
+                                if (!HiddenDisplay.viewerAttached) Stage.park()
+                            }
+                        }
+                    }
                 }
             } finally {
                 done?.invoke(!ok)
@@ -425,6 +453,8 @@ object AgentHub {
         framesThisAct = 0
         // A song or video from the last request moves to the stage first, so this one can't cover (and stop) it.
         Stage.beforeRequest()
+        HiddenDisplay.beginRequest()
+        _showScreen.value = null
         busy.value = true
         val started = System.currentTimeMillis()
         var cost = 0.0

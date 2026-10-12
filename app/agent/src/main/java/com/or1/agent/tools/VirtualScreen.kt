@@ -30,7 +30,8 @@ import kotlinx.coroutines.flow.StateFlow
  * FLAG_SECURE windows render here too, instead of black in the previews, viewer and screenshots. The hidden flags need
  * signature permissions, which the platform key grants.
  *
- * Owns the display's lifecycle, its surface (the frame reader, or the viewer's), its per-display screen wake lock and
+ * Owns the display's lifecycle, its surface (the viewer's, else the media card's, else the frame reader), its per-display
+ * screen wake lock and
  * its frames ([preview]). Frames are converted only while something collects [preview] (the act card's evidence strip,
  * the live media card); otherwise the newest image is just kept for [latestFrame], which converts it on demand. On this
  * phone, converting every frame of a playing video cost or1 ~28% of a core.
@@ -72,10 +73,18 @@ class VirtualScreen(private val name: String) {
     var parked = false
         private set
 
-    /** The viewer renders straight from the display instead of the reader. */
+    /** The full-screen viewer renders straight from the display: it takes the surface over the card and the reader. */
     @Volatile
-    var viewerAttached = false
-        private set
+    private var viewerSurface: Surface? = null
+
+    /** The live media card's TextureView (the stage only): over the reader, under the viewer. */
+    @Volatile
+    private var cardSurface: Surface? = null
+
+    val viewerAttached: Boolean get() = viewerSurface != null
+
+    /** Frames reach the reader, so [settle] and the previews can see them. */
+    private val readerShown: Boolean get() = viewerSurface == null && cardSurface == null && !parked
 
     /** Creates the display; [onStopped] runs if the system stops it. Returns its id. */
     @Synchronized
@@ -113,7 +122,8 @@ class VirtualScreen(private val name: String) {
         display?.release()
         display = null
         parked = false
-        viewerAttached = false
+        viewerSurface = null
+        cardSurface = null
         wakeLock?.takeIf { it.isHeld }?.release()
         held?.close()
         held = null
@@ -125,8 +135,8 @@ class VirtualScreen(private val name: String) {
     @Synchronized
     fun park() {
         if (viewerAttached || display == null) return
-        display?.surface = null
         parked = true
+        route()
         wakeLock?.takeIf { it.isHeld }?.release()
     }
 
@@ -135,8 +145,13 @@ class VirtualScreen(private val name: String) {
     fun unpark(): Boolean {
         if (!parked) return false
         parked = false
-        reader?.surface?.let { display?.surface = it }
+        route()
         return true
+    }
+
+    /** Gives the display the surface that should show it now: the viewer's, the card's, the reader's, or none (parked). */
+    private fun route() {
+        display?.surface = viewerSurface ?: cardSurface ?: reader?.surface?.takeIf { !parked }
     }
 
     // --- Power ----------------------------------------------------------------------------------------------------
@@ -178,15 +193,28 @@ class VirtualScreen(private val name: String) {
 
     @Synchronized
     fun attachViewer(surface: Surface) {
-        display?.surface = surface
-        viewerAttached = true
+        viewerSurface = surface
         parked = false
+        route()
     }
 
     @Synchronized
     fun detachViewer() {
-        viewerAttached = false
-        reader?.surface?.let { display?.surface = it }
+        viewerSurface = null
+        route()
+    }
+
+    /** The live media card shows the display (the stage's video) until [detachCard] or the viewer takes it. */
+    @Synchronized
+    fun attachCard(surface: Surface) {
+        cardSurface = surface
+        route()
+    }
+
+    @Synchronized
+    fun detachCard() {
+        cardSurface = null
+        route()
     }
 
     // --- Frames ---------------------------------------------------------------------------------------------------
@@ -215,11 +243,11 @@ class VirtualScreen(private val name: String) {
      * Waits until the display stops drawing: it only produces a frame when something on it changes, so no new frame
      * for [QUIET_MS] (after at least [MIN_SETTLE_MS], for the app to react) means the screen settled. Returns early
      * after [maxMs] (a video or spinner never stops drawing) and waits the whole [maxMs] when frames can't be seen
-     * (the viewer renders them, or the display is parked).
+     * (the viewer or the media card renders them, or the display is parked).
      */
     suspend fun settle(maxMs: Long) {
         val start = SystemClock.uptimeMillis()
-        if (viewerAttached || parked || display == null) {
+        if (!readerShown || display == null) {
             kotlinx.coroutines.delay(maxMs)
             return
         }
