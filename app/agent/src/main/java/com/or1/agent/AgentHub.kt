@@ -285,7 +285,7 @@ object AgentHub {
                     ok = !outcome.failed && !outcome.stopped
                     requestId?.let { recordReply(it, outcome.reply, outcome.cost, outcome.requests, outcome.seconds) }
                     returnToComposer()
-                    HiddenDisplay.park()
+                    MediaKeeper.park()
                 }
             } finally {
                 done?.invoke(!ok)
@@ -350,7 +350,7 @@ object AgentHub {
                     _runningRoutine.value = null
                     // Hand focus back to the real screen without pulling the chat in front of anything.
                     HiddenDisplay.restoreFocus()
-                    HiddenDisplay.park()
+                    MediaKeeper.park()
                     if (wake.isHeld) wake.release()
                 }
             }
@@ -576,7 +576,7 @@ object AgentHub {
                 ActivityLog.update(effectId, UndoState.PENDING)
                 scope.launch(Dispatchers.IO) {
                     // The Clock app shows its timer notification (which the timer undo uses) only while it's not in front.
-                    if (spec.optString("op") == "timer" && !_busy.value && !_routineBusy.value) HiddenDisplay.park()
+                    if (spec.optString("op") == "timer" && !_busy.value && !_routineBusy.value) MediaKeeper.park()
                     val result = runCatching { Undo.local(tools, spec) }
                     result.onFailure { Log.w(TAG, "undo $effectId failed", it) }
                     ActivityLog.update(
@@ -584,7 +584,7 @@ object AgentHub {
                         result.getOrNull() ?: result.exceptionOrNull()?.let { it.message ?: it.javaClass.simpleName },
                     )
                     // The alarm undo goes through the work display; put it away unless a request is using it.
-                    if (spec.optString("op") == "alarm" && !_busy.value && !_routineBusy.value) HiddenDisplay.park()
+                    if (spec.optString("op") == "alarm" && !_busy.value && !_routineBusy.value) MediaKeeper.park()
                 }
             }
             UndoTier.AGENT -> {

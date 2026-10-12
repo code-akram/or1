@@ -63,7 +63,7 @@ class AgentService : Service() {
  * languages (installed, downloading, downloadable, online) and the plan it picks; `--es voice download` triggers the
  * language model download on each recogniser that hasn't got it (progress in logcat on API 34). `--es now dump` writes the Now state ([NowState]) to files/now.txt (tag or1-now).
  *
- * Hidden display checks: `--es display info|create|launch|tap|back|home|park|restore|focus|snap|front|move|tool [--es name N --es args JSON] [--es pkg P] [--ei x X --ei y Y]
+ * Hidden display checks: `--es display info|create|launch|tap|back|home|park|keep|restore|focus|snap|front|move|tool [--es name N --es args JSON] [--es pkg P] [--ei x X --ei y Y]
  * [--ei task T]`; results go to logcat (tag or1-display) and files/display.txt.
  */
 class DebugReceiver : BroadcastReceiver() {
@@ -332,6 +332,8 @@ private fun displayCommand(context: Context, command: String, intent: Intent) {
                 "back" -> "injected=${HiddenDisplay.injectKey(android.view.KeyEvent.KEYCODE_BACK, HiddenDisplay.ensure()!!)}"
                 "home" -> { HiddenDisplay.goHome(); "home" }
                 "park" -> { HiddenDisplay.park(); "parked" }
+                // What a request's end does: park, unless media plays in front (MediaKeeper).
+                "keep" -> { MediaKeeper.park(); "keep: front=${HiddenDisplay.id?.let { HiddenDisplay.topAppPackage(it) }} media=${NowState.media.value}" }
                 "restore" -> { HiddenDisplay.restoreFocus(); "restored" }
                 "focus" -> "focused=${HiddenDisplay.focus()}"
                 "tool" -> debugTools(context).run(intent.getStringExtra("name")!!, org.json.JSONObject(intent.getStringExtra("args") ?: "{}")).text

@@ -237,9 +237,9 @@ class NowStateTest {
         val chips = NowLogic.chips(
             timers = listOf(timer("t", elapsed + 1_000)), routine = "Morning · Every day at 08:00",
             alarm = NextAlarm(wall + 8 * hour, "Gym", null), event = NextEvent(1, "Dentist", wall + 2 * hour, wall + 3 * hour, null),
-            notifications = 4, apps = 2, now = wall,
+            notifications = 4, apps = 2, now = wall, media = MediaNow("com.google.android.youtube", "Song", null, 3),
         )
-        assertEquals(listOf("timer:t", "routine", "alarm", "event:1", "notifications"), chips.map { it.key })
+        assertEquals(listOf("timer:t", "routine", "media", "alarm", "event:1", "notifications"), chips.map { it.key })
     }
 
     @Test fun farAlarmsAndEventsAndNoNotificationsMakeNoChips() {

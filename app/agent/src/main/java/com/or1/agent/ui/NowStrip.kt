@@ -28,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -97,6 +98,16 @@ fun NowStrip(
                 is NowChip.RoutineRun -> Chip("Routine running: ${chip.label}", onClick = onRoutine) {
                     March()
                     Text(chip.label, style = Type.Step.copy(color = Palette.Text), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 120.dp))
+                }
+                is NowChip.Media -> {
+                    val context = LocalContext.current
+                    val name = chip.media.title ?: remember(chip.media.pkg) { appName(context, chip.media.pkg) }
+                    val playing = chip.media.playing
+                    Chip((if (playing) "Playing: " else "Paused: ") + name, onClick = toggle) {
+                        Glyph(Icons.Music, if (playing) Palette.Live else Palette.Text2)
+                        Text(name, style = Type.Step.copy(color = Palette.Text), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 120.dp))
+                    }
+                    if (open) ChipAction(if (playing) "Pause" else "Play") { NowState.playPause(chip.media.pkg) }
                 }
                 is NowChip.Notifications -> Chip("${chip.count} new notifications. Open triage.", onClick = onTriage) {
                     Glyph(Icons.Bell)
@@ -201,3 +212,7 @@ private fun EventChip(chip: NowChip.Event) {
         Text(until, style = Type.Step.copy(fontFeatureSettings = "tnum"), maxLines = 1)
     }
 }
+
+private fun appName(context: android.content.Context, pkg: String): String = runCatching {
+    context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(pkg, 0)).toString()
+}.getOrDefault(pkg)

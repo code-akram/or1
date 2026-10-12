@@ -131,6 +131,8 @@ sealed interface NowChip {
 
     data class Timer(val timer: NowTimer) : NowChip { override val key get() = "timer:${timer.id}" }
     data class RoutineRun(val label: String) : NowChip { override val key get() = "routine" }
+    /** Media kept playing on the work display after its turn ([MediaKeeper]). */
+    data class Media(val media: MediaNow) : NowChip { override val key get() = "media" }
     data class Alarm(val alarm: NextAlarm) : NowChip { override val key get() = "alarm" }
     data class Event(val event: NextEvent) : NowChip { override val key get() = "event:${event.eventId}" }
     data class Notifications(val count: Int, val apps: Int) : NowChip { override val key get() = "notifications" }
@@ -212,6 +214,7 @@ object NowState {
             }
         }
         scope.launch { AgentHub.runningRoutine.collect { refreshChips() } }
+        scope.launch { MediaKeeper.kept.collect { refreshChips() } }
         scope.launch {
             while (true) {
                 refreshEvent()
@@ -271,7 +274,7 @@ object NowState {
         val time = Instant.ofEpochMilli(next.at).atZone(ZoneId.systemDefault())
         scope.launch(Dispatchers.IO) {
             runCatching { SystemTools(context).dismissAlarm(time.hour, time.minute, next.label) }.onFailure { Log.w(TAG, "alarm off failed", it) }
-            if (!AgentHub.busy.value && !AgentHub.routineBusy.value) HiddenDisplay.park()
+            if (!AgentHub.busy.value && !AgentHub.routineBusy.value) MediaKeeper.park()
             refreshAlarm()
         }
         return true
@@ -365,6 +368,7 @@ object NowState {
                 state = runCatching { c.playbackState?.state }.getOrNull() ?: PlaybackState.STATE_NONE,
             )
         }
+        refreshChips()
     }
 
     private fun refreshEvent() {
@@ -430,7 +434,16 @@ object NowState {
         _chips.value = NowLogic.chips(
             _timers.value, AgentHub.runningRoutine.value, _alarm.value, _event.value,
             groups.sumOf { it.items.size }, groups.size, System.currentTimeMillis(),
+            MediaKeeper.kept.value?.let { pkg -> _media.value.firstOrNull { it.pkg == pkg } ?: MediaNow(pkg, null, null, PlaybackState.STATE_NONE) },
         )
+    }
+
+    /** Pause or play the media session of [pkg] (the Now strip's media chip). False without one. */
+    fun playPause(pkg: String): Boolean {
+        val controller = controllers.firstOrNull { it.first.packageName == pkg }?.first ?: return false
+        val playing = _media.value.firstOrNull { it.pkg == pkg }?.playing == true
+        main.post { runCatching { if (playing) controller.transportControls.pause() else controller.transportControls.play() }.onFailure { Log.w(TAG, "play/pause", it) } }
+        return true
     }
 }
 
@@ -699,9 +712,11 @@ object NowLogic {
      */
     fun chips(
         timers: List<NowTimer>, routine: String?, alarm: NextAlarm?, event: NextEvent?, notifications: Int, apps: Int, now: Long,
+        media: MediaNow? = null,
     ): List<NowChip> = buildList {
         sortTimers(timers).forEach { add(NowChip.Timer(it)) }
         routine?.let { add(NowChip.RoutineRun(it)) }
+        media?.let { add(NowChip.Media(it)) }
         alarm?.takeIf { it.at > now && it.at - now <= ALARM_CHIP_MS }?.let { add(NowChip.Alarm(it)) }
         event?.takeIf { it.end > now && it.begin - now <= EVENT_CHIP_MS }?.let { add(NowChip.Event(it)) }
         if (notifications > 0) add(NowChip.Notifications(notifications, apps))

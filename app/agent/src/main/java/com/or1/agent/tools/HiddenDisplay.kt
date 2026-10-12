@@ -224,6 +224,32 @@ object HiddenDisplay {
         HiddenAudio.unmuteAll()
     }
 
+    /** [park] unless a request is using the display (it parks it when it ends). */
+    @Synchronized
+    fun parkIfIdle() {
+        if (!_inUse.value) park()
+    }
+
+    /**
+     * The request is over but the display keeps running (MediaKeeper: the app in front plays media): the app is heard,
+     * the screen wake lock stays ([keepAwake] extends it).
+     */
+    @Synchronized
+    fun release() {
+        _inUse.value = false
+        if (display == null || parked) return
+        HiddenAudio.unmuteAll()
+        keepAwake()
+    }
+
+    /** Extends the display's screen wake lock (10 minutes from now) while it's awake. */
+    @Synchronized
+    fun keepAwake() {
+        if (display == null || parked) return
+        val lock = wakeLock
+        if (lock == null) id?.let(::holdAwake) else lock.acquire(10 * 60_000L)
+    }
+
     private var wakeLock: android.os.PowerManager.WakeLock? = null
 
     /**

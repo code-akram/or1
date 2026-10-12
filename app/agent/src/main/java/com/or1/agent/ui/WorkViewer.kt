@@ -178,7 +178,7 @@ private class WorkSurface(context: Context) : SurfaceView(context), SurfaceHolde
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         HiddenDisplay.detachViewer()
-        if (!AgentHub.busy.value) HiddenDisplay.park()
+        if (!AgentHub.busy.value) com.or1.agent.MediaKeeper.park()
     }
 
     @SuppressLint("ClickableViewAccessibility")
