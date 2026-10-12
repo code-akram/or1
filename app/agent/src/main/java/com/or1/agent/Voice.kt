@@ -679,7 +679,7 @@ object AudioFocus {
  * [SpeechOutput] on Android's [TextToSpeech] (Google's engine when installed). A reply is split into sentences
  * ([Sentences.split]) and queued one utterance each, so [SpeechProgress.index] follows the voice. The level is a
  * synthetic envelope ([WordEnvelope]) pulsed on word boundaries (`onRangeStart`), sampled every 100 ms while speaking
- * only. Holds transient audio focus ([AudioFocus]) while speaking.
+ * only. Holds transient audio focus ([AudioFocus]) from the first sentence's start until speech ends.
  */
 class AndroidSpeechOutput(context: Context) : SpeechOutput {
     private val appContext = context.applicationContext
@@ -733,7 +733,6 @@ class AndroidSpeechOutput(context: Context) : SpeechOutput {
             if (!ready) {
                 pending = text to id
                 _progress.value = SpeechProgress(id, Sentences.split(text), -1, speaking = true)
-                AudioFocus.hold(appContext, "speak")
                 return
             }
             enqueue(text, id)
@@ -751,7 +750,6 @@ class AndroidSpeechOutput(context: Context) : SpeechOutput {
             return
         }
         _progress.value = SpeechProgress(id, sentences, -1, speaking = true)
-        AudioFocus.hold(appContext, "speak")
         sentences.forEachIndexed { i, sentence ->
             tts.speak(sentence, if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "$s#$i")
         }
@@ -792,6 +790,8 @@ class AndroidSpeechOutput(context: Context) : SpeechOutput {
             synchronized(this@AndroidSpeechOutput) {
                 if (parse(utteranceId) == null) return
                 _progress.value = _progress.value.copy(index = i, speaking = true)
+                // Media ducks only while the voice is heard, not while the engine synthesises the first sentence.
+                AudioFocus.hold(appContext, "speak")
                 if (ticker?.isActive != true) ticker = scope.launch {
                     while (isActive) {
                         _level.value = envelope.level(SystemClock.uptimeMillis())

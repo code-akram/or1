@@ -370,11 +370,13 @@ private fun VoiceMode(onClose: () -> Unit, first: String?) {
                     val id = "voice-${turn?.key ?: SystemClock.uptimeMillis()}"
                     replyId = id
                     phase = Phase.SPEAKING
-                    val said = turn?.let(::spokenSummary) ?: "Sorry, that didn't work."
-                    Log.i(VOICE_TAG, "voice mode says: $said")
                     // The turn started a song or video: the user wants to hear it, not a microphone open over it (the
-                    // recogniser would hear the media too). Say the reply without barge-in, then close.
+                    // recogniser would hear the media too), nor a long reply over its start. Say one sentence without
+                    // barge-in, then close.
                     val media = workMediaPlaying()
+                    val summary = turn?.let(::spokenSummary) ?: "Sorry, that didn't work."
+                    val said = if (media) Sentences.split(summary).firstOrNull() ?: summary else summary
+                    Log.i(VOICE_TAG, "voice mode says: $said")
                     say(output, input, said, id, bargeIn = !media) { silentReply = it }?.let { barged ->
                         echo = said
                         pending = barged.text?.let { WakePhrase.strip(Barge.userPart(it, said)) }?.ifBlank { null }

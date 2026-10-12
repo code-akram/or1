@@ -330,7 +330,7 @@ class ScreenTools(private val context: Context) {
                     if (cont.isActive) cont.resume(null)
                 }
             })
-        } ?: HiddenDisplay.preview.value?.takeIf { displayId != Display.DEFAULT_DISPLAY } ?: return null
+        } ?: HiddenDisplay.latestFrame()?.takeIf { displayId != Display.DEFAULT_DISPLAY } ?: return null
         val scale = SCREENSHOT_WIDTH.toFloat() / bitmap.width
         val small = Bitmap.createScaledBitmap(bitmap, SCREENSHOT_WIDTH, (bitmap.height * scale).toInt(), true)
         val out = ByteArrayOutputStream()

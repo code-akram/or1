@@ -31,9 +31,11 @@ import kotlinx.coroutines.flow.StateFlow
  * signature permissions, which the platform key grants.
  *
  * Owns the display's lifecycle, its surface (the frame reader, or the viewer's), its per-display screen wake lock and
- * its frames ([preview]). With [framesWanted] off, frames are drained without being converted.
+ * its frames ([preview]). Frames are converted only while something collects [preview] (the act card's evidence strip,
+ * the live media card); otherwise the newest image is just kept for [latestFrame], which converts it on demand. On this
+ * phone, converting every frame of a playing video cost or1 ~28% of a core.
  */
-class VirtualScreen(private val name: String, private val framesWanted: () -> Boolean = { true }) {
+class VirtualScreen(private val name: String) {
     private lateinit var context: Context
     private var display: VirtualDisplay? = null
     private var reader: ImageReader? = null
@@ -189,17 +191,16 @@ class VirtualScreen(private val name: String, private val framesWanted: () -> Bo
 
     // --- Frames ---------------------------------------------------------------------------------------------------
 
-    /** Always drain the reader so the display never stalls; keep the newest image and convert it at most every interval. */
+    /**
+     * Always drain the reader so the display never stalls; keep the newest image, and convert it at most every interval
+     * while [preview] has collectors.
+     */
     private fun onFrame(r: ImageReader) {
         val image = try { r.acquireLatestImage() } catch (e: IllegalStateException) { null } ?: return
         held?.close()
-        if (!framesWanted()) {
-            image.close()
-            held = null
-            return
-        }
         held = image
         dirty = true
+        if (_preview.subscriptionCount.value == 0) return
         val wait = previewInterval - (SystemClock.uptimeMillis() - lastConverted)
         if (wait <= 0) convert() else if (!handler.hasCallbacks(convertRunnable)) handler.postDelayed(convertRunnable, wait)
     }

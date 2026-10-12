@@ -355,7 +355,7 @@ private fun displayCommand(context: Context, command: String, intent: Intent) {
                 "tool" -> debugTools(context).run(intent.getStringExtra("name")!!, org.json.JSONObject(intent.getStringExtra("args") ?: "{}")).text
                 "snap" -> {
                     java.io.File(context.filesDir, "preview.png").outputStream().use {
-                        HiddenDisplay.preview.value!!.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+                        HiddenDisplay.latestFrame(500)!!.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
                     }
                     "snap saved"
                 }

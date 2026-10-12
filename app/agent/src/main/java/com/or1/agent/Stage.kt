@@ -43,23 +43,21 @@ object Stage {
     private var decide: Job? = null
     private var watch: Job? = null
 
-    /** Frames are converted only while something shows them (the live media card). */
-    @Volatile
-    private var framesWanted = false
-    private val screen = VirtualScreen("or1-stage") { framesWanted }
+    private val screen = VirtualScreen("or1-stage")
 
     private val _kept = MutableStateFlow<String?>(null)
     /** The package playing on the stage, or null. */
     val kept: StateFlow<String?> = _kept
 
     val id: Int? get() = screen.id
-    val preview get() = screen.preview
 
-    /** The live media card shows the stage: convert its frames, quickly. */
-    fun follow(on: Boolean) {
-        framesWanted = on
-        screen.fastPreview(on)
-    }
+    /**
+     * The live media card shows the stage's video: the display renders straight into [surface] (a TextureView's), so
+     * it plays smoothly; [hide] hands the display back to its frame reader.
+     */
+    fun show(surface: android.view.Surface) = screen.attachViewer(surface)
+
+    fun hide() = screen.detachViewer()
 
     fun init(context: Context) {
         this.context = context.applicationContext

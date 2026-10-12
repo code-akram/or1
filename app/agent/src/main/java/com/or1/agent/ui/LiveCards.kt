@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -36,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -92,12 +94,11 @@ private object MediaFrames {
 }
 
 /**
- * A 16:9 crop of the work display while the turn's media app is in front there, or of the stage while it plays there
- * after its turn ([com.or1.agent.Stage]): plain image swaps of the preview
- * (500 ms, 400 ms while this card follows it), no SurfaceView (the viewer keeps the only one). Paused: a play badge;
- * playing: steady `live` blocks on an ink0 60% mat (so they show on bright frames). Frozen (an older card, another app
- * in front, or the media stopped): the last frame under an ink0 40% veil. The whole card opens the viewer, which is the
- * player.
+ * A 16:9 crop of the turn's media app: while it's in front of the work display, plain image swaps of the preview
+ * (500 ms, 400 ms while this card follows it; no SurfaceView, the viewer keeps that one); while it plays on the stage
+ * after its turn, the video itself ([StageVideo]). Paused: a play badge; playing: steady `live` blocks on an ink0 60%
+ * mat (so they show on bright frames). Frozen (an older card, another app in front, or the media stopped): the last
+ * frame under an ink0 40% veil. The whole card opens the viewer, which is the player.
  */
 @Composable
 internal fun MediaCard(card: ResultCard.Media, live: Boolean) {
@@ -114,21 +115,21 @@ internal fun MediaCard(card: ResultCard.Media, live: Boolean) {
     val playing = following && session?.playing == true
     var frame by remember(card.key) { mutableStateOf(MediaFrames.get(card.key)) }
     var onScreen by remember { mutableStateOf(false) }
-    if (following && onScreen) {
+    // On the stage the card shows the video itself (StageVideo); on the work display, image swaps of its preview.
+    if (following && onScreen && !staged) {
         val lifecycle = LocalLifecycleOwner.current.lifecycle
-        LaunchedEffect(card.key, lifecycle, staged) {
+        LaunchedEffect(card.key, lifecycle) {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                val fast: (Boolean) -> Unit = if (staged) com.or1.agent.Stage::follow else HiddenDisplay::fastPreview
-                fast(true)
+                HiddenDisplay.fastPreview(true)
                 try {
-                    (if (staged) com.or1.agent.Stage.preview else HiddenDisplay.preview).filterNotNull().collectLatest { bitmap ->
+                    HiddenDisplay.preview.filterNotNull().collectLatest { bitmap ->
                         val cropped = withContext(Dispatchers.Default) { cropFrame(bitmap, card.pkg) }
                         val title = NowState.media.value.firstOrNull { it.pkg == card.pkg }?.title ?: frame?.second
                         MediaFrames.put(card.key, cropped, title)
                         frame = cropped to title
                     }
                 } finally {
-                    fast(false)
+                    HiddenDisplay.fastPreview(false)
                 }
             }
         }
@@ -148,7 +149,10 @@ internal fun MediaCard(card: ResultCard.Media, live: Boolean) {
                 .clearAndSetSemantics { contentDescription = "$app, $state" },
         ) {
             val image = frame?.first
-            if (image != null) {
+            if (following && staged && onScreen) {
+                // A TextureView draws its transformed buffer past its bounds unless the layer clips it.
+                StageVideo(card.pkg, Modifier.fillMaxSize().clipToBounds())
+            } else if (image != null) {
                 Image(image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             } else {
                 Icon(Icons.Screen, null, tint = Palette.Text3, modifier = Modifier.size(24.dp).align(Alignment.Center))
@@ -173,6 +177,60 @@ internal fun MediaCard(card: ResultCard.Media, live: Boolean) {
             title?.let { Text(it, style = Type.Label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         }
     }
+}
+
+/**
+ * The stage's video, smooth: the stage display renders straight into this TextureView ([com.or1.agent.Stage.show]),
+ * transformed so the card's 16:9 crop of the 720x1600 screen ([MediaCards.crop]) fills it. While it's shown the stage
+ * converts no frames.
+ */
+@Composable
+private fun StageVideo(pkg: String, modifier: Modifier) {
+    val stage = com.or1.agent.Stage
+    DisposableEffect(Unit) { onDispose { stage.hide() } }
+    androidx.compose.ui.viewinterop.AndroidView(
+        modifier = modifier,
+        factory = { context ->
+            android.view.TextureView(context).apply {
+                surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
+                    private var surface: android.view.Surface? = null
+
+                    override fun onSurfaceTextureAvailable(texture: android.graphics.SurfaceTexture, width: Int, height: Int) {
+                        texture.setDefaultBufferSize(STAGE_W, STAGE_H)
+                        surface = android.view.Surface(texture).also(stage::show)
+                        fit(this@apply, width, height, pkg)
+                    }
+
+                    override fun onSurfaceTextureSizeChanged(texture: android.graphics.SurfaceTexture, width: Int, height: Int) =
+                        fit(this@apply, width, height, pkg)
+
+                    override fun onSurfaceTextureDestroyed(texture: android.graphics.SurfaceTexture): Boolean {
+                        stage.hide()
+                        surface?.release()
+                        surface = null
+                        return true
+                    }
+
+                    override fun onSurfaceTextureUpdated(texture: android.graphics.SurfaceTexture) {}
+                }
+            }
+        },
+    )
+}
+
+private const val STAGE_W = 720
+private const val STAGE_H = 1600
+
+/** A TextureView stretches the whole buffer over the view; scale and shift it so the crop fills the view instead. */
+private fun fit(view: android.view.TextureView, width: Int, height: Int, pkg: String) {
+    val (left, top, w, h) = MediaCards.crop(STAGE_W, STAGE_H, pkg)
+    if (w <= 0 || h <= 0) return
+    view.setTransform(
+        android.graphics.Matrix().apply {
+            setScale(STAGE_W.toFloat() / w, STAGE_H.toFloat() / h)
+            postTranslate(-left * width.toFloat() / w, -top * height.toFloat() / h)
+        },
+    )
 }
 
 private fun cropFrame(src: Bitmap, pkg: String): ImageBitmap {

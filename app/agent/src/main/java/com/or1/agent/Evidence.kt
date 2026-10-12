@@ -78,7 +78,8 @@ object Evidence {
      */
     fun capture(effectId: String): EvidenceFrame? {
         val dir = dir ?: return null
-        val source = HiddenDisplay.latestFrame() ?: return null
+        // Nothing may be watching the work display, so its newest frame may not be converted yet: allow a little longer.
+        val source = HiddenDisplay.latestFrame(120) ?: return null
         val frame = runCatching { scale(source) }.onFailure { Log.w(TAG, "could not scale a frame", it) }.getOrNull() ?: return null
         val file = File(dir, "$effectId.webp")
         val job = scope.launch {

@@ -1,6 +1,7 @@
 package com.or1.agent
 
 import android.content.Context
+import android.os.SystemClock
 import com.anthropic.client.AnthropicClient
 import com.anthropic.core.JsonValue
 import com.anthropic.helpers.MessageAccumulator
@@ -140,12 +141,16 @@ class Agent(
                 .thinking(ThinkingConfigAdaptive.builder().display(ThinkingConfigAdaptive.Display.SUMMARIZED).build())
                 .outputConfig(OutputConfig.builder().effort(effort(config.effort)).build())
                 .build()
+            val started = SystemClock.elapsedRealtime()
             val response = stream(params)
             val cost = usage.add(config.model, response.usage())
             transcript.log(
                 JSONObject()
                     .put("stop", response.stopReason().map { it.toString() }.orElse(""))
                     .put("cost", cost)
+                    // Where a request's time goes: the whole call, and until its first streamed event.
+                    .put("ms", SystemClock.elapsedRealtime() - started)
+                    .put("first_ms", firstEventMs)
                     .put("response", toJsonObject(response))
             )
 
@@ -184,9 +189,12 @@ class Agent(
     private suspend fun stream(params: MessageCreateParams): Message = withContext(Dispatchers.IO) {
         val accumulator = MessageAccumulator.create()
         val text = StringBuilder()
+        val started = SystemClock.elapsedRealtime()
+        firstEventMs = -1
         client.messages().createStreaming(params).use { response ->
             for (event in response.stream().iterator()) {
                 coroutineContext.ensureActive()
+                if (firstEventMs < 0) firstEventMs = SystemClock.elapsedRealtime() - started
                 accumulator.accumulate(event)
                 event.contentBlockStart().ifPresent { start ->
                     if (start.contentBlock().isText() && text.isNotEmpty()) text.append('\n')
@@ -199,9 +207,14 @@ class Agent(
         accumulator.message()
     }
 
+    /** Milliseconds from sending the last model call to its first streamed event (time to first token, roughly). */
+    @Volatile
+    private var firstEventMs = -1L
+
     private suspend fun runTool(call: ToolUseBlock): ToolResultBlockParam {
         val args = toJsonObject(call._input())
         val name = call.name()
+        val started = SystemClock.elapsedRealtime()
         hooks.toolCall(name, args)
         val result = ToolResultBlockParam.builder().toolUseId(call.id())
         val output = try {
@@ -212,12 +225,15 @@ class Agent(
             // Tool failures go back to the model, not up the stack.
             val error = "Error: ${e.message ?: e.javaClass.simpleName}"
             hooks.toolResult(name, error, true)
-            transcript.log(JSONObject().put("tool", name).put("args", args).put("result", error).put("is_error", true))
+            transcript.log(JSONObject().put("tool", name).put("args", args).put("result", error).put("is_error", true).put("ms", SystemClock.elapsedRealtime() - started))
             return result.content(error).isError(true).build()
         }
         hooks.toolResult(name, output.text, false)
         hooks.toolDone(name, args, output)
-        transcript.log(JSONObject().put("tool", name).put("args", args).put("result", output.text).put("image", output.jpegBase64 != null))
+        transcript.log(
+            JSONObject().put("tool", name).put("args", args).put("result", output.text).put("image", output.jpegBase64 != null)
+                .put("ms", SystemClock.elapsedRealtime() - started),
+        )
         val hint = if (!cardHints) null else runCatching {
             ResultCards.cardHint(name, args.keys().asSequence().associateWith { args.optString(it) }, output.text)
         }.getOrNull()

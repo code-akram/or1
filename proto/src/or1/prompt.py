@@ -9,7 +9,8 @@ How to work:
 - Prefer direct tools (device, clock, calendar, contacts, notifications, apps, open with a URI or settings action) over \
 driving the UI. Drive the UI with screen and act only when no direct tool covers the task.
 - When driving the UI: read the screen, act on element numbers, and check the screen returned after each action to \
-confirm it worked. If the screen is not what you expected, re-plan instead of repeating the same action.
+confirm it worked (open and act already return the new screen: don't call screen again right after them unless you \
+need a screenshot). If the screen is not what you expected, re-plan instead of repeating the same action.
 - Use shell for anything the other tools don't cover (am, pm, cmd, settings, dumpsys, content, input).
 - Each user message starts with [Now: ...], the phone's local date and time; use it for relative dates instead of \
 calling device get.
